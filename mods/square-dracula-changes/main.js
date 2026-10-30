@@ -1,3 +1,6 @@
+// Modified from Herdr 0.1.7 for Square Dracula.
+// Upstream: https://github.com/herdrdev/herdr-app (Apache-2.0).
+
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex, Scrollbar, v_virtual_list } from "gpui-base";
 import { spaces, panes, focused, exec, readTextFile, watchFolder, theme, settings } from "herdr";

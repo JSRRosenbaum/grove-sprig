@@ -3,6 +3,9 @@
 // ↑/↓ move, Enter runs, Esc closes. An item is [label, command, args];
 // a command "worktree" opens the worktree dialog instead.
 
+// Modified from Herdr 0.1.7 for Square Dracula.
+// Upstream: https://github.com/herdrdev/herdr-app (Apache-2.0).
+
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { run, props, closeOverlay, openOverlay, theme, keys, terminals, spaces, panes, exec } from "herdr";
@@ -106,7 +109,7 @@ export default class Menu extends View {
     const it = items(props(), this.git)[i];
     if (!it) return;
     closeOverlay(props()?.overlay);
-    if (it[1] === "worktree") openOverlay({ mod: "square-worktree", kind: "dialog", frame: "none", ...(it[2].action === "open" ? { width: 560, height: 480 } : { width: 440, height: 260 }), props: it[2] });
+    if (it[1] === "worktree") openOverlay({ mod: "square-dracula-worktree", kind: "dialog", frame: "none", ...(it[2].action === "open" ? { width: 560, height: 480 } : { width: 440, height: 260 }), props: it[2] });
     else run(it[1], it[2]);
   }
 
@@ -116,7 +119,7 @@ export default class Menu extends View {
     if (p?.tab === "pane" && !p.frameless) {
       if (!this.reframed) {
         this.reframed = true;
-        openOverlay({ mod: "square-menu", kind: "popup", frame: "none", at: "pointer", width: 220, height: 260, props: { tab: p.tab, target: p.target, frameless: true } });
+        openOverlay({ mod: "square-dracula-menu", kind: "popup", frame: "none", at: "pointer", width: 220, height: 260, props: { tab: p.tab, target: p.target, frameless: true } });
         closeOverlay(p.overlay);
       }
 

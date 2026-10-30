@@ -1,3 +1,6 @@
+// Modified from Herdr 0.1.7 for Square Dracula.
+// Upstream: https://github.com/herdrdev/herdr-app (Apache-2.0).
+
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex } from "gpui-base";
 import { spaces, panes, run, openOverlay, theme, window, shared, layout } from "herdr";
@@ -64,7 +67,7 @@ export default class Tabs extends View {
           if (from !== null && from !== i) run("tab.move", { id: shown[from].id, index: space.tabs.findIndex(x => x.id === c.id) + 1 });
           else run("tab.select", { id: c.id });
         })
-        .on_mouse_down("right", () => openOverlay({ mod: "square-menu", kind: "popup", frame: "none", width: 200, props: { tab: "tab", target: { id: c.id, space: space.id } } }))
+        .on_mouse_down("right", () => openOverlay({ mod: "square-dracula-menu", kind: "popup", frame: "none", width: 200, props: { tab: "tab", target: { id: c.id, space: space.id } } }))
         .when(Boolean(program?.icon), el => el.child(program.tint ? svg(program.icon).size(14).text_color(c.active ? t.accent_foreground : t.muted) : image(program.icon).size(14)))
         .child(div().max_w(170).truncate().child(c.zoomed ? `${name} Z` : name))
         .when(c.status === "working", el => el.child(svg("mods/workspace-chrome/spinner.svg").size(12).flex_none().text_color(t.working).spin(900)))
@@ -89,7 +92,7 @@ export default class Tabs extends View {
       .on_scroll_wheel(e => { if (Math.abs(e.delta.y) >= 1) run(e.delta.y > 0 ? "tab.prev" : "tab.next"); })
       .child(h_flex().id("tab-scroll").flex_1().min_w(0).h_full().items_center().overflow_x_scrollbar()
         .children(shown.map(item))
-        .child(button("tab-new", "+", () => openOverlay({ mod: "square-new-menu", kind: "popup", frame: "none", width: 250, height: 512 }))))
+        .child(button("tab-new", "+", () => openOverlay({ mod: "square-dracula-new-menu", kind: "popup", frame: "none", width: 250, height: 512 }))))
       .when(enabled.includes("files"), el => el.child(panelButton("files", "Files", "mods/files/file.svg")))
       .when(enabled.includes("changes"), el => el.child(panelButton("changes", "Changes", "mods/changes/changes.svg")))
       .when(window()?.buttons, el => el.child(button("minimize", "−", () => run("window.minimize")))

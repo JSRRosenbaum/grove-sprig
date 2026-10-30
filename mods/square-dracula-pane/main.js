@@ -1,8 +1,10 @@
 // A pane's header, for layouts that frame their panes:
-//   { "tab": "active", "pane": { "header": { "content": { "mod": "square-pane" } } } }
 // Shows the program's icon (the app's program table), the agent's name or
 // the terminal's title, the folder, and the agent's status; buttons split, zoom and close
 // this pane. Props from the app: { pane, terminal }. Click: focus the pane.
+
+// Modified from Herdr 0.1.7 for Square Dracula.
+// Upstream: https://github.com/herdrdev/herdr-app (Apache-2.0).
 
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex } from "gpui-base";
@@ -40,7 +42,7 @@ export default class Pane extends View {
         cx.stop_propagation();
         run(command, args);
       })
-      .child(svg(`mods/square-pane/${icon}.svg`).size(14));
+      .child(svg(`mods/square-dracula-pane/${icon}.svg`).size(14));
   }
 
   render(cx) {

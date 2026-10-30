@@ -1,3 +1,6 @@
+// Modified from Herdr 0.1.7 for Square Dracula.
+// Upstream: https://github.com/herdrdev/herdr-app (Apache-2.0).
+
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex, v_flex } from "gpui-base";
 import { theme, spaces, panes, knownAgents, run, openOverlay, closeOverlay, props, window } from "herdr";
@@ -45,7 +48,7 @@ export default class NewMenu extends View {
         .when(this.agents.length === 0, el => el.child(div().px(14).py(6).text_color(t.dim).child(this.failed ? "Could not load agents" : "Checking installed agents…"))))
       .child(div().h(1).bg(t.border))
       .child(this.row("space", div().w(14).child("+"), "New space", () => run("space.new"), `${mod} N`))
-      .child(this.row("worktree", svg("mods/workspace-chrome/branch.svg").size(14), "New worktree…", () => openOverlay({ mod: "square-worktree", kind: "dialog", frame: "none", width: 460, height: 280, props: { space: space?.id, folder: panes().find(p => p.focused)?.cwd, action: "new" } }), "", Boolean(space)))
-      .child(this.row("worktree-open", svg("mods/workspace-chrome/branch.svg").size(14), "Open worktree\u2026", () => openOverlay({ mod: "square-worktree", kind: "dialog", frame: "none", width: 560, height: 480, props: { space: space?.id, folder: panes().find(p => p.focused)?.cwd, action: "open" } }), "", Boolean(space)));
+      .child(this.row("worktree", svg("mods/workspace-chrome/branch.svg").size(14), "New worktree…", () => openOverlay({ mod: "square-dracula-worktree", kind: "dialog", frame: "none", width: 460, height: 280, props: { space: space?.id, folder: panes().find(p => p.focused)?.cwd, action: "new" } }), "", Boolean(space)))
+      .child(this.row("worktree-open", svg("mods/workspace-chrome/branch.svg").size(14), "Open worktree\u2026", () => openOverlay({ mod: "square-dracula-worktree", kind: "dialog", frame: "none", width: 560, height: 480, props: { space: space?.id, folder: panes().find(p => p.focused)?.cwd, action: "open" } }), "", Boolean(space)));
   }
 }

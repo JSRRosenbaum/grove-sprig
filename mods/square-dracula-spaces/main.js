@@ -1,3 +1,6 @@
+// Modified from Herdr 0.1.7 for Square Dracula.
+// Upstream: https://github.com/herdrdev/herdr-app (Apache-2.0).
+
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { spaces, machines, panes, run, openOverlay, exec, hc, theme, shared, setShared, watchFolder, window } from "herdr";
@@ -176,7 +179,7 @@ export default class Spaces extends View {
 
   menu(w) {
     // A popup is as tall as its items; height is only the most.
-    openOverlay({ mod: "square-menu", kind: "popup", frame: "none", width: 200, height: 260, props: { tab: "space", target: { id: w.id } } });
+    openOverlay({ mod: "square-dracula-menu", kind: "popup", frame: "none", width: 200, height: 260, props: { tab: "space", target: { id: w.id } } });
   }
 
   // Spaces in order, each worktree space moved under its main checkout's.

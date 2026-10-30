@@ -1,6 +1,9 @@
 // Worktree dialog: { space, action: "new" | "open" | "remove" } or
 // { folder, machine } for a repo without a space; optional { branch, tab, argv }.
 
+// Modified from Herdr 0.1.7 for Square Dracula.
+// Upstream: https://github.com/herdrdev/herdr-app (Apache-2.0).
+
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input, Scrollbar } from "gpui-base";
 import { run, props, closeOverlay, theme, spaces, panes, exec, home } from "herdr";

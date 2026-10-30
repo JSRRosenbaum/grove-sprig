@@ -4,6 +4,9 @@
 // a tab, Esc to leave. Last rows: new work (a tab here, a space on this
 // computer or on each connected machine).
 
+// Modified from Herdr 0.1.7 for Square Dracula.
+// Upstream: https://github.com/herdrdev/herdr-app (Apache-2.0).
+
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
 import { agents, spaces, terminals, run, hc, theme, props, closeOverlay, openOverlay, shared, setShared } from "herdr";

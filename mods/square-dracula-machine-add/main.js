@@ -6,6 +6,9 @@
 // (`mod.open machine-add`); the sidebars' Add machine and the welcome
 // open it.
 
+// Modified from Herdr 0.1.7 for Square Dracula.
+// Upstream: https://github.com/herdrdev/herdr-app (Apache-2.0).
+
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
 import { hc, exec, home, readTextFile, theme, props, closeOverlay, openOverlay } from "herdr";
@@ -187,7 +190,7 @@ export default class MachineAdd extends View {
         type: "column",
         border: { width: 1, color: "border" },
         children: [
-          { type: "block", size: { px: 30 }, content: { mod: "square-machine-add", props: { part: "bar", target } } },
+          { type: "block", size: { px: 30 }, content: { mod: "square-dracula-machine-add", props: { part: "bar", target } } },
           { type: "block", content: { terminal: address } },
         ],
       },
