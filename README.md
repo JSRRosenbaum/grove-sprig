@@ -25,6 +25,10 @@ JSON view state, not its configuration. Configuration edits are shared and
 hot-reload in all windows. Spaces, tabs and splits remain shared core structure.
 One window owns automatic alert sounds at a time.
 
+Zoom shortcuts save `window.zoom` in that slot's `shared.json`; they do not
+overwrite `settings.json`. The latter's `zoom` remains the initial default for
+a window without an override.
+
 ```sh
 herdr-app windows
 herdr-app --window 2 status
