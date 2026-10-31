@@ -1,6 +1,42 @@
-# Herdr
+# Herdr — Rowan multiwindow fork
 
 Herdr is a desktop app for terminals and coding agents. Keep work in spaces, see which agents need you, and leave terminals running when you close the window.
+
+This is an **unofficial fork** of [herdrdev/herdr-app](https://github.com/herdrdev/herdr-app),
+maintained at [JSRRosenbaum/herdr-app](https://github.com/JSRRosenbaum/herdr-app).
+It restores concurrent windows on one configuration and core. The upstream
+installers below install official Herdr, **not this fork**. Local source builds
+do not auto-update; no fork release binaries are published here.
+
+## Multiple windows
+
+Launch `herdr-app` again to open another independent window. All windows use the
+same configuration, layouts, mods and running herdr-core terminals. Opening a
+window does not start another copy of an agent. Closing a window leaves those
+terminals running.
+
+Each window independently selects its workspace, tab and terminal pane, and keeps
+its own live terminal scroll position. They are not mirrors of one viewport.
+Each has a locked numeric slot and its own zoom, sidebar/mod state,
+layout clicks, floating panels and saved placement. Slot 1 preserves the
+existing state paths; later slots persist under `views/<id>/` and reuse their
+own state when reopened. New slots initially copy the first window's saved
+JSON view state, not its configuration. Configuration edits are shared and
+hot-reload in all windows. Spaces, tabs and splits remain shared core structure.
+One window owns automatic alert sounds at a time.
+
+```sh
+herdr-app windows
+herdr-app --window 2 status
+herdr-app --window 2 ls
+herdr-app --window 2 do space.select --id <space-id>
+herdr-app --window 2 shot /tmp/herdr-window-2.png
+```
+
+Without `--window`, CLI requests use the only live window or the uniquely active
+one. If several windows are open and none is uniquely active, the request fails
+and asks for a target; it never guesses which window to change. An unavailable
+explicit target fails without falling back to another window.
 
 ## Install
 

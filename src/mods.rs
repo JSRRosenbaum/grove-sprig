@@ -133,7 +133,7 @@ fn sync_defaults(mods: &Path, installed_path: &Path, shipped_mods: &[(&str, &[u8
     write_if_changed(installed_path, serde_json::to_string_pretty(&installed).unwrap() + "\n")
 }
 
-pub fn sync_layouts(home: &Path, layouts: &[(&str, &str)]) -> std::io::Result<()> {
+pub fn sync_layouts(home: &Path, state_home: &Path, layouts: &[(&str, &str)]) -> std::io::Result<()> {
     let record = home.join("installed.json");
     let mut installed: Installed = serde_json::from_str(&std::fs::read_to_string(&record).unwrap_or_default()).unwrap_or_default();
     let dir = home.join("layouts");
@@ -146,7 +146,7 @@ pub fn sync_layouts(home: &Path, layouts: &[(&str, &str)]) -> std::io::Result<()
         let path = dir.join(format!("{}.json", &key["layout:".len()..]));
         if path.exists() && installed[&key].get("json").is_some_and(|hash| std::fs::read_to_string(&path).is_ok_and(|text| layout_fingerprint(&text) == *hash)) {
             std::fs::remove_file(path)?;
-            let _ = std::fs::remove_file(dir.join(".state").join(format!("{}.json", &key["layout:".len()..])));
+            let _ = std::fs::remove_file(state_home.join("layouts/.state").join(format!("{}.json", &key["layout:".len()..])));
         }
         installed.remove(&key);
     }
@@ -168,7 +168,7 @@ pub fn sync_layouts(home: &Path, layouts: &[(&str, &str)]) -> std::io::Result<()
             };
             if current != *was && current != hash {
                 let clone = edited_name(&dir, name, ".json");
-                copy_layout_state(home, name, &clone)?;
+                copy_layout_state(state_home, name, &clone)?;
                 std::fs::rename(&path, dir.join(format!("{clone}.json")))?;
                 edited_note(&clone);
             }
@@ -436,7 +436,7 @@ pub fn set_shared(key: String, value: Value) {
 }
 
 fn with_shared<R>(f: impl FnOnce(&mut SharedStore) -> R) -> R {
-    SHARED.with_borrow_mut(|slot| f(slot.get_or_insert_with(|| SharedStore::load(app_dir().join("shared.json")))))
+    SHARED.with_borrow_mut(|slot| f(slot.get_or_insert_with(|| SharedStore::load(crate::instances::state_dir().join("shared.json")))))
 }
 
 /// Called after mod close handlers, so their last changes reach disk before exit.
@@ -1092,7 +1092,7 @@ pub fn prepare_load(inst: &Instance) -> u64 {
         s.set(s.get() + 1);
         s.get()
     });
-    let dir = app_dir().join("data").join(&inst.name);
+    let dir = crate::instances::state_dir().join("data").join(&inst.name);
     let _ = std::fs::create_dir_all(&dir);
     let file = if inst.props.is_null() {
         "store.json".to_owned()
@@ -1256,7 +1256,7 @@ mod tests {
         let shipped = r#"{"id":"root","type":"block","content":{"mod":"files"},"size":{"px":360}}"#;
         // No record: formatting, BOM and whole-number floats are not edits.
         std::fs::write(dir.join("main.json"), "\u{feff}{\r\n \"type\":\"block\", \"id\":\"root\", \"size\":{\"px\":360.0}, \"content\":{\"mod\":\"files\"}}").unwrap();
-        sync_layouts(&root, &[("main", shipped)]).unwrap();
+        sync_layouts(&root, &root, &[("main", shipped)]).unwrap();
         assert!(!dir.join("main-edited.json").exists());
         assert!(!dir.join(".base").exists());
         let mut file: Node = serde_json::from_str(shipped).unwrap();
@@ -1267,7 +1267,7 @@ mod tests {
         let mut state = State::between(&file, &shown);
         state.file = serde_json::to_value(&file).ok();
         std::fs::write(dir.join(".state/main.json"), serde_json::to_string(&state).unwrap()).unwrap();
-        sync_layouts(&root, &[("main", shipped)]).unwrap();
+        sync_layouts(&root, &root, &[("main", shipped)]).unwrap();
         let mut rescued: Node = serde_json::from_str(&std::fs::read_to_string(dir.join("main-edited.json")).unwrap()).unwrap();
         let mut clicks: State = serde_json::from_str(&std::fs::read_to_string(dir.join(".state/main-edited.json")).unwrap()).unwrap();
         clicks.forget_since_saved(&rescued);
@@ -1285,7 +1285,7 @@ mod tests {
         // 0.1.x wrote no record of what it installed.
         std::fs::write(dir.join("main.json"), r#"{"id":"root","type":"block","content":{"mod":"old"}}"#).unwrap();
         take_sync_notes();
-        sync_layouts(&root, &[("main", r#"{"id":"root","type":"block","content":{"mod":"new"}}"#)]).unwrap();
+        sync_layouts(&root, &root, &[("main", r#"{"id":"root","type":"block","content":{"mod":"new"}}"#)]).unwrap();
         assert!(std::fs::read_to_string(dir.join("main.json")).unwrap().contains("new"));
         let aside = dir.join(format!("main.json.before-{}", env!("CARGO_PKG_VERSION")));
         assert!(std::fs::read_to_string(aside).unwrap().contains("old"));
@@ -1299,24 +1299,44 @@ mod tests {
         let root = std::env::temp_dir().join(format!("herdr-layout-sync-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let dir = root.join("layouts");
-        sync_layouts(&root, &[("a", "a1"), ("b", "b1"), ("c", "c1")]).unwrap();
+        sync_layouts(&root, &root, &[("a", "a1"), ("b", "b1"), ("c", "c1")]).unwrap();
         std::fs::create_dir_all(dir.join(".state")).unwrap();
         std::fs::write(dir.join(".state/a.json"), "clicks").unwrap();
         std::fs::write(dir.join("a.json"), "mine").unwrap();
         std::fs::write(dir.join("b.json"), "kept").unwrap();
-        sync_layouts(&root, &[("a", "a2")]).unwrap();
+        sync_layouts(&root, &root, &[("a", "a2")]).unwrap();
         assert_eq!(std::fs::read_to_string(dir.join("a.json")).unwrap(), "a2");
         assert_eq!(std::fs::read_to_string(dir.join("a-edited.json")).unwrap(), "mine");
         assert_eq!(std::fs::read_to_string(dir.join("b.json")).unwrap(), "kept");
         assert!(!dir.join("c.json").exists());
         assert_eq!(std::fs::read_to_string(dir.join(".state/a.json")).unwrap(), "clicks");
         std::fs::write(dir.join("a.json"), "again").unwrap();
-        sync_layouts(&root, &[("a", "a2")]).unwrap();
+        sync_layouts(&root, &root, &[("a", "a2")]).unwrap();
         assert_eq!(std::fs::read_to_string(dir.join("a-edited-2.json")).unwrap(), "again");
         assert_eq!(std::fs::read_to_string(dir.join("a-edited.json")).unwrap(), "mine");
         std::fs::remove_file(dir.join("a.json")).unwrap();
-        sync_layouts(&root, &[("a", "a3")]).unwrap();
+        sync_layouts(&root, &root, &[("a", "a3")]).unwrap();
         assert_eq!(std::fs::read_to_string(dir.join("a.json")).unwrap(), "a3");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn layout_sync_uses_the_supplied_state_home() {
+        let root = std::env::temp_dir().join(format!("herdr-layout-state-home-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let state_home = root.join("views/2");
+        let state = state_home.join("layouts/.state");
+        let legacy = root.join("layouts/.state");
+        sync_layouts(&root, &state_home, &[("main", "shipped")]).unwrap();
+        std::fs::create_dir_all(&state).unwrap();
+        std::fs::create_dir_all(&legacy).unwrap();
+        std::fs::write(state.join("main.json"), "slot clicks").unwrap();
+        std::fs::write(legacy.join("main.json"), "legacy clicks").unwrap();
+        std::fs::write(root.join("layouts/main.json"), "personal edit").unwrap();
+        sync_layouts(&root, &state_home, &[("main", "shipped")]).unwrap();
+        assert_eq!(std::fs::read_to_string(state.join("main-edited.json")).unwrap(), "slot clicks");
+        assert!(!legacy.join("main-edited.json").exists());
+        assert_eq!(std::fs::read_to_string(legacy.join("main.json")).unwrap(), "legacy clicks");
         std::fs::remove_dir_all(root).unwrap();
     }
 

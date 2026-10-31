@@ -2,6 +2,14 @@
 
 ## [0.1.9] - 2026-10-30
 
+### Unofficial Rowan fork additions - 2026-10-31
+- Ordinary launches open concurrent windows on the same configuration and core.
+- Each window keeps separately locked, persistent view/mod state; shared configuration
+  and core terminals are not duplicated.
+- `herdr-app windows` lists live windows; `--window <id>` explicitly targets CLI
+  inspection and commands. Ambiguous requests fail instead of guessing a window.
+- Automatic completion/blocked sounds have one owner across windows.
+
 ### Fixed
 - On macOS, updates keep Herdr's Apple signature again, so macOS stops forgetting the permissions you gave Herdr.
 - Herdr no longer uses CPU in the background when the Changes or Files panel is open in a git repo.

@@ -47,15 +47,29 @@ function shellCommands(source: string): string[][] {
 
 export function checkExample(source: string, ref: Reference): string[] {
   const errors: string[] = [];
-  const verbs = new Set([...ref.help.matchAll(/^\s+herdr-app\s+([\w-]+)/gm)].map(m => m[1]));
+  const verbs = new Set([...ref.help.matchAll(/^\s+herdr-app\s+(?:\[--window N\]\s+)?([\w-]+)/gm)].map(m => m[1]));
   verbs.add("--help"); // The help used to build this reference was obtained with this flag.
   for (const words of shellCommands(source)) {
     const start = words.findIndex(w => /^(?:\.\/|[\w./-]+\/)?herdr-app(?:\.exe)?$/.test(w));
     if (start < 0) continue;
     const args = words.slice(start + 1);
+    const targeted = args[0] === "--window";
+    if (targeted) {
+      args.shift();
+      const id = args.shift();
+      if (!id || (!/^<[^>]+>$/.test(id) && (!/^\d+$/.test(id) || Number(id) < 1 || Number(id) > 0xffffffff))) {
+        errors.push("--window needs a positive numeric window ID");
+        continue;
+      }
+      if (!args.length) { errors.push("--window needs a command"); continue; }
+    }
     const verb = args.shift();
     if (!verb) continue;
     if (!verbs.has(verb)) { errors.push(`unknown command or flag: ${verb}`); continue; }
+    if (targeted && !["windows", "ls", "status", "shot", "do", "feedback"].includes(verb)) {
+      errors.push(`--window cannot be used with ${verb}`);
+      continue;
+    }
     if (verb !== "do") {
       for (const arg of args) if (arg.startsWith("-")) errors.push(`unknown flag for ${verb}: ${arg}`);
       continue;

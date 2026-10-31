@@ -9,16 +9,24 @@ Your terminal address is `$HC_TERMINAL_ID`; it is not a pane ID.
 ## Inspect before acting
 
 ```sh
+herdr-app windows     # live window IDs, activity, PID and normal status
 herdr-app ls          # spaces > tabs > terminals, including pane IDs
 herdr-app status      # current layout, focus, overlays, zoom and file/mod errors
 herdr-app commands    # available commands, arguments and descriptions
 ```
 
-`ls` and `status` talk to the running window, not a new app. `commands`
-prints the built-in command list even without an open window. Do not launch bare
-`herdr-app` to inspect it: that opens or raises the window. Do not stop,
-signal or restart the person's app or core. A window closing does not kill
-its terminals.
+`ls` and `status` talk to a running window, not a new app. `commands`
+prints the built-in command list even without an open window. In the Rowan fork,
+each ordinary `herdr-app` launch opens another independent window using the same
+configuration and core terminals. Never launch it just to inspect.
+
+Use `herdr-app --window <id> status`, `ls`, `shot <file>` or `do <command>` to
+target an ID returned by `windows`. Without a selector, the only live window or
+the uniquely active one is used; ambiguous requests fail and require a selector.
+A missing explicit ID never falls back to another window. Window selection,
+mod state, layout clicks and placement are independent; core spaces/tabs/splits
+and configuration edits are shared. Closing a window leaves core terminals live.
+Do not stop, signal or restart the person's app or core without authorization.
 
 ## Show something when asked
 

@@ -75,6 +75,10 @@ fn file(name: &str) -> PathBuf {
     mods::app_dir().join(name)
 }
 
+fn state_file(name: &str) -> PathBuf {
+    crate::instances::state_dir().join(name)
+}
+
 fn is_dark(a: gpui::WindowAppearance) -> bool {
     matches!(a, gpui::WindowAppearance::Dark | gpui::WindowAppearance::VibrantDark)
 }
@@ -175,7 +179,7 @@ pub(crate) fn layout_names() -> Vec<String> {
 }
 
 fn state_path(name: &str) -> PathBuf {
-    file(&format!("layouts/.state/{name}.json"))
+    state_file(&format!("layouts/.state/{name}.json"))
 }
 
 /// The clicks on a layout (layout_sync.rs), none if unreadable.
@@ -229,7 +233,7 @@ fn missing_mods(name: &str) -> Vec<String> {
 }
 
 fn install_layouts() {
-    if let Err(e) = mods::sync_layouts(&mods::app_dir(), LAYOUTS) {
+    if let Err(e) = mods::sync_layouts(&mods::app_dir(), &crate::instances::state_dir(), LAYOUTS) {
         tracing::warn!("cannot install layouts: {e}");
     }
     for (name, text) in LAYOUT_PREVIEWS {
@@ -248,7 +252,7 @@ fn clone_layout(name: &str, to: &str) -> std::io::Result<()> {
     let mut dest = std::fs::OpenOptions::new().write(true).create_new(true).open(layout_path(to))?;
     let result = (|| {
         dest.write_all(text.as_bytes())?;
-        mods::copy_layout_state(&mods::app_dir(), name, to)
+        mods::copy_layout_state(&crate::instances::state_dir(), name, to)
     })();
     if result.is_err() {
         let _ = std::fs::remove_file(layout_path(to));
@@ -449,7 +453,7 @@ impl AppWindow {
     pub fn new(core: Arc<Core>, requests: async_channel::Receiver<Request>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let runtime = ShellRuntime::new(cx).map_err(|e| tracing::error!("script runtime failed, mods are off: {e:#}")).ok();
         mods::note_fonts(cx);
-        let seen = std::fs::read_to_string(file("seen.json")).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+        let seen = std::fs::read_to_string(state_file("seen.json")).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
         let mut w = AppWindow {
             core,
             runtime,
@@ -502,7 +506,7 @@ impl AppWindow {
                 local.connection(true, None, None);
                 [(String::new(), local)].into()
             },
-            initial_view: std::fs::read_to_string(file("view.json")).ok().and_then(|s| serde_json::from_str(&s).ok()),
+            initial_view: std::fs::read_to_string(state_file("view.json")).ok().and_then(|s| serde_json::from_str(&s).ok()),
             pointer: Point::default(),
             drag_from: None,
             titlebar_applied: None,
@@ -543,10 +547,17 @@ impl AppWindow {
             crate::place::save(window, cx);
             true
         });
-        settings::install_themes();
-        crate::programs::install_icons();
+        match crate::instances::startup_guard() {
+            Ok(_guard) => {
+                settings::install_themes();
+                crate::programs::install_icons();
+                install_layouts();
+            }
+            Err(e) => {
+                tracing::error!("cannot lock startup configuration: {e}");
+            }
+        }
         w.reload_config(window, cx);
-        install_layouts();
         let name = mods::shared("layout").and_then(|v| v.as_str().map(str::to_owned)).filter(|n| layout_path(n).exists());
         // A layout whose mods are gone (Zen, T4, ADE after the update took
         // theirs) starts on Herdr's instead of a wall of "did not load".
@@ -794,25 +805,17 @@ impl AppWindow {
 
     // ---- config files ------------------------------------------------------
 
-    /// Changes settings.json from inside the app (the zoom keys). If the file
-    /// is broken mid-edit, the change applies for now without touching it.
-    fn write_person(&mut self, change: impl FnOnce(&mut settings::Person), window: &mut Window, cx: &mut Context<Self>) {
-        let broken = settings::load_person().is_err();
-        change(&mut self.person);
-        if !broken {
-            if let Err(e) = settings::write_person(&self.person) {
-                tracing::warn!("cannot write settings.json: {e}");
-            }
-            self.watched.settings = mtime(&settings::path());
-        }
-        self.apply_look(window, cx);
-    }
 
     /// Runs with the shown layout's look (its root node) at the person's zoom.
     fn apply_look(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         // A layout's fonts arrive with its mod: added since the start, they load now.
         if settings::load_home_fonts(cx) {
             mods::note_fonts(cx);
+        }
+        if let Some(zoom) = mods::shared("window.zoom").and_then(|v| v.as_f64())
+            .filter(|z| (settings::ZOOM_MIN as f64..=settings::ZOOM_MAX as f64).contains(z))
+        {
+            self.person.zoom = zoom as f32;
         }
         let s = settings::Settings::compose(&self.person, &self.chrome.look, self.system_dark);
         let problems = s.problems();
@@ -1057,7 +1060,7 @@ impl AppWindow {
             view.preserve_unloaded(saved, |machine| self.documents.get(machine.unwrap_or("")).is_some_and(|s| s.document.is_some()));
         }
         let view = serde_json::to_string_pretty(&view).unwrap_or_default() + "\n";
-        if self.documents.values().any(|s| s.document.is_some()) && view != self.written_view && write_atomic(&file("view.json"), &view) {
+        if self.documents.values().any(|s| s.document.is_some()) && view != self.written_view && write_atomic(&state_file("view.json"), &view) {
             self.written_view = view;
         }
     }
@@ -1085,7 +1088,7 @@ impl AppWindow {
         let ok = if state.is_empty() {
             std::fs::remove_file(&path).is_ok() || !path.exists()
         } else {
-            let _ = std::fs::create_dir_all(file("layouts/.state"));
+            let _ = std::fs::create_dir_all(state_file("layouts/.state"));
             write_atomic(&path, &text)
         };
         if ok {
@@ -1911,7 +1914,7 @@ impl AppWindow {
     /// toast (drawn by the `toast` mod; click it to go there) unless they're
     /// looking at that agent.
     fn alert(&mut self, addr: &str, alert: model::Alert, looking: bool, window: &mut Window, cx: &mut Context<Self>) {
-        if settings::get().sounds.enabled {
+        if settings::get().sounds.enabled && crate::instances::may_alert() {
             crate::sound::play(if alert == model::Alert::Blocked { "blocked" } else { "done" });
         }
         // Needing the person brings a settled tab back.
@@ -3134,7 +3137,8 @@ impl AppWindow {
                     "app.zoom_out" => -1,
                     _ => 0,
                 });
-                self.write_person(|p| p.zoom = zoom, window, cx);
+                mods::set_shared("window.zoom".into(), json!(zoom));
+                self.apply_look(window, cx);
             }
             "app.quit" => cx.quit(),
             "app.update" => {
@@ -3424,12 +3428,6 @@ impl AppWindow {
         if cmd.get("commands").is_some() {
             return crate::commands::listing();
         }
-        // Herdr was launched again: this window comes to the front instead.
-        if cmd.get("raise").is_some() {
-            cx.activate(true);
-            window.activate_window();
-            return json!({ "ok": true });
-        }
         if cmd.get("ls").is_some() {
             return self.world();
         }
@@ -3442,6 +3440,9 @@ impl AppWindow {
                 .chain(self.documents.iter().filter_map(|(m, s)| s.error.as_ref().map(|e| format!("layout {}: {e}", if m.is_empty() { "local" } else { m }))))
                 .collect();
             return json!({
+                "window_id": crate::instances::id(),
+                "pid": std::process::id(),
+                "active": window.is_window_active(),
                 "zoom": round(settings::zoom()),
                 "font_size": round(settings::font_size()),
                 "ui_font_size": round(settings::ui_font_size()),
@@ -3601,7 +3602,7 @@ impl AppWindow {
                 continue;
             }
             self.seen.insert(f.id.clone());
-            write_atomic(&file("seen.json"), &serde_json::to_string(&self.seen).unwrap_or_default());
+            write_atomic(&state_file("seen.json"), &serde_json::to_string(&self.seen).unwrap_or_default());
             let shown = self.chrome.walk().iter().any(|n| matches!(n.content(), Some(Content::Mod { name, .. }) if *name == f.id));
             let place = f.hint.place.as_deref().unwrap_or("right");
             if !shown && place != "none" && !shipped_layouts().contains(&self.layout_name.as_str()) {

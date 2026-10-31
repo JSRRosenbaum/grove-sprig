@@ -38,7 +38,7 @@ thread_local! {
 }
 
 fn path() -> PathBuf {
-    crate::mods::app_dir().join("window.json")
+    crate::instances::state_dir().join("window.json")
 }
 
 fn load() -> Option<Place> {

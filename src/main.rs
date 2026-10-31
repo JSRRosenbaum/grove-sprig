@@ -7,6 +7,7 @@ mod control;
 mod core_bin;
 mod files;
 mod hc;
+mod instances;
 mod keys;
 mod layout;
 mod layout_sync;
@@ -39,16 +40,17 @@ mod window;
 use gpui::*;
 
 const HELP: &str = "\
-herdr-app: the Herdr desktop app. With no arguments it opens the window.
+herdr-app: the Herdr desktop app. With no arguments it opens another window.
 
 Usage:
-  herdr-app                        open the window
-  herdr-app ls                     spaces, their tabs and terminals, in the open window
-  herdr-app do <command> [args]    run a command: --name api --argv '[\"pi\"]', or one JSON object
-  herdr-app feedback <text>        draft feedback for the person to review and send
+  herdr-app                        open another window
+  herdr-app windows                list live windows and their status
+  herdr-app [--window N] ls        spaces, tabs and terminals in a window
+  herdr-app [--window N] do <command> [args]  run a command with named or JSON arguments
+  herdr-app [--window N] feedback <text>  draft feedback for review
   herdr-app commands               every command, its arguments, what it does
-  herdr-app status                 what the window shows, and any errors
-  herdr-app shot [file.png]        save the last window frame (default: herdr-shot.png)
+  herdr-app [--window N] status    what the window shows, and any errors
+  herdr-app [--window N] shot [file.png]  save the last window frame
   herdr-app check <mod folder>     load a mod once and report what's wrong
   herdr-app --skill                Agent Skill: driving the window, and where hc fits
   herdr-app --version
@@ -56,6 +58,9 @@ Usage:
 The terminals run in herdr-core (`hc`), which keeps them alive when the
 window closes. `hc --help`: start, read, wait on and talk to terminals and
 agents. The app shows them and arranges them in spaces and tabs.
+With multiple windows, commands without --window select the uniquely active
+window; otherwise specify --window N. See `herdr-app windows` for IDs.
+
 
 Home: ~/.config/herdr-app (HERDR_APP_HOME picks another).
 ";
@@ -85,13 +90,19 @@ fn main() {
         gpui_shell::host::main_with_components(gpui_shell::FrozenComponentRegistry::default());
         return;
     }
-    if matches!(args.get(1).map(String::as_str), Some("do" | "status" | "ls" | "commands" | "feedback" | "shot")) {
-        std::process::exit(control::client(&args[1..]));
+    if args.get(1).is_some_and(|arg| arg == "--window") {
+        let id = args.get(2).and_then(|s| s.parse::<u32>().ok()).filter(|id| *id > 0);
+        let Some(id) = id else {
+            eprintln!("herdr-app: --window needs a positive numeric window ID");
+            std::process::exit(2);
+        };
+        std::process::exit(control::client(&args[3..], Some(id)));
+    }
+    if matches!(args.get(1).map(String::as_str), Some("do" | "status" | "ls" | "commands" | "feedback" | "shot" | "windows")) {
+        std::process::exit(control::client(&args[1..], None));
     }
     // Anything else from a shell answers in the shell; only a bare launch opens the window.
     match args.get(1).map(String::as_str) {
-        // Already open on this home: that window comes to the front.
-        None if control::raise_running() => return,
         None => {}
         Some("-h" | "--help" | "help") => return print!("{HELP}"),
         Some("--skill") => return print!("{}", include_str!("SKILL.md")),
@@ -114,12 +125,22 @@ fn main() {
     if update::apply_on_startup() {
         return;
     }
+    if let Err(e) = instances::claim() {
+        eprintln!("herdr-app: cannot claim a window slot: {e}");
+        std::process::exit(1);
+    }
+
 
     telemetry::clock();
-    // A first start sizes the app to the screen and the system's text size.
-    let fresh = !settings::path().exists();
-    // The core people installed; without one, the setup screen installs it.
-    let person = settings::load_person();
+    // First-start settings are shared, so creation must be serialized too.
+    let (fresh, person) = {
+        let _guard = instances::startup_guard().unwrap_or_else(|e| {
+            eprintln!("herdr-app: cannot lock startup configuration: {e}");
+            std::process::exit(1);
+        });
+        let fresh = !settings::path().exists();
+        (fresh, settings::load_person())
+    };
     let configured = person.as_ref().ok().and_then(|p| p.core.clone());
     let core: Result<std::sync::Arc<hc::Core>, setup::Need> = match core_bin::find(configured.as_deref()) {
         None => Err(setup::Need::Install),
@@ -143,8 +164,14 @@ fn main() {
     update::start();
     telemetry::start(settings::telemetry_setting(&person));
     bench::start();
-    if let Err(e) = mods::write_workspace() {
-        eprintln!("herdr-app: cannot write {}: {e}", mods::app_dir().display());
+    {
+        let _guard = instances::startup_guard().unwrap_or_else(|e| {
+            eprintln!("herdr-app: cannot lock startup configuration: {e}");
+            std::process::exit(1);
+        });
+        if let Err(e) = mods::write_workspace() {
+            eprintln!("herdr-app: cannot write {}: {e}", mods::app_dir().display());
+        }
     }
 
     gpui_platform::application()
@@ -182,12 +209,27 @@ fn main() {
                 let width = cx.primary_display().map(|d| f32::from(d.bounds().size.width));
                 let zoom = settings::first_zoom(width);
                 if zoom != 1.0 {
-                    let _ = settings::write_person(&settings::Person { zoom, ..Default::default() });
+                    match instances::startup_guard() {
+                        Ok(_guard) => {
+                            if let Ok(mut person) = settings::load_person() {
+                                if person.zoom == 1.0 {
+                                    person.zoom = zoom;
+                                    if let Err(e) = settings::write_person(&person) {
+                                        eprintln!("herdr-app: cannot write first-start zoom: {e}");
+                                    }
+                                }
+                            }
+                        },
+                        Err(e) => eprintln!("herdr-app: cannot lock first-start zoom: {e}"),
+                    }
                 }
             }
             let requests = mods::install_policy();
             if let Some(tx) = mods::request_sender() {
-                control::listen(tx);
+                if let Err(e) = control::listen(tx) {
+                    eprintln!("herdr-app: cannot serve window {} control socket: {e}", instances::id());
+                    std::process::exit(1);
+                }
             }
             match core {
                 Ok(core) => open_main(core, requests, cx),
