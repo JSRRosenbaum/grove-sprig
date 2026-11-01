@@ -17,7 +17,7 @@ async function setup(bindings, layout = 'rowan-terminal') {
   const modules = {
     'gpui-kit': {View: class {}, div: el},
     'gpui-base': {v_flex: el, h_flex: el, InputState: {new: () => ({on() {}, focus() {}, value() { return ''; }})}, Input: {new: el}},
-    herdr: {keys: () => bindings, window: () => ({layout_name: layout}), props: () => ({}), closeOverlay() {}, theme: () => ({})},
+    herdr: {keys: () => bindings, window: () => layout === null ? null : ({layout_name: layout}), props: () => ({}), closeOverlay() {}, theme: () => ({})},
   };
   const main = new vm.SourceTextModule(await readFile(new URL('./main.js', import.meta.url), 'utf8'), {context});
   await main.link(specifier => new vm.SyntheticModule(Object.keys(modules[specifier]), function () {
@@ -55,4 +55,14 @@ test('guide shows readable guarded actions and filters both shortcut and action'
   assert.match(render(), /Move tab right/); assert.match(render(), /in editor mod/);
   help.filter = 'move tab'; assert.match(render(), /Move tab right/); assert.doesNotMatch(render(), /Focus pane/);
   help.filter = 'ctrl+space'; assert.match(render(), /Focus pane left/); assert.doesNotMatch(render(), /Move tab/);
+});
+
+test('a standalone mod check shows global keys without inventing an active layout', async () => {
+  const {help} = await setup([
+    binding('global', 'ctrl-h', 'app.help'),
+    binding('layout:rowan-terminal', 'ctrl-x', 'space.new'),
+  ], null);
+  const rendered = text(help.render({}));
+  assert.match(rendered, /Show keybinds/);
+  assert.doesNotMatch(rendered, /New workspace/);
 });

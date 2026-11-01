@@ -58,7 +58,7 @@ export function describe(action) {
 // inside their own mod and are listed separately, not as terminal bindings.
 export function effectiveBindings(bindings, layoutName) {
   const priority = section => section === "terminal" ? 2 : section.startsWith("layout:") ? 1 : 0;
-  const normal = bindings.filter(k => (layoutName && k.section === "global") || k.section === "terminal" ||
+  const normal = bindings.filter(k => k.section === "global" || k.section === "terminal" ||
     (layoutName && k.section === `layout:${layoutName}`));
   const winners = new Map();
   for (const k of normal) {
@@ -82,7 +82,7 @@ export default class Help extends View {
   render(cx) {
     const t = theme();
     const f = this.filter.toLowerCase();
-    const layoutName = window().layout_name;
+    const layoutName = window()?.layout_name;
     const all = effectiveBindings(keys(), layoutName).map(k => ({
       ...k, group: describe(k.action)[0],
       label: k.action === "rowan-spaces.prefix-cancel" && !k.keys.includes(" ") ? "Prefix" : describe(k.action)[1],
@@ -110,7 +110,7 @@ export default class Help extends View {
           .child(div().text_size(15).font_semibold().text_color(t.foreground).child("Keybinds"))
           .child(div().text_size(11).text_color(t.dim).child("Esc")),
       )
-      .when(!layoutName, e => e.child(div().text_color(t.dim).child("Layout unavailable; global and layout shortcuts are not shown.")))
+      .when(!layoutName, e => e.child(div().text_color(t.dim).child("Layout unavailable; layout-specific shortcuts are not shown.")))
       .child(Input.new(this.input).h(36).flex_none().px(10).rounded(9).border_1().border_color(t.accent).bg(t.background).text_size(12.8).text_color(t.foreground))
       .child(
         v_flex()
