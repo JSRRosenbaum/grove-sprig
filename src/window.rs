@@ -3689,12 +3689,27 @@ impl AppWindow {
         if h.bottom() { el.child(body).child(head) } else { el.child(head).child(body) }.into_any_element()
     }
 
+    /// The content beside a visible sidebar, in the same native layout row.
+    fn prefix_anchor(&self) -> Option<&Node> {
+        if self.chrome.axis() != Some(Axis::Row) { return None; }
+        self.chrome.children().iter().filter(|node| !node.hidden)
+            .skip_while(|node| node.id != "sidebar").nth(1)
+    }
+
     /// `frame`: how panes are wrapped here (inside a framed tab), else None.
     fn render_node(&self, n: &Node, focused: &HashSet<String>, frame: Option<&PaneFrame>, cx: &mut Context<Self>) -> AnyElement {
         let mut el = div().relative().overflow_hidden().size_full().flex();
         let bounds_map = self.bounds.clone();
         let id = n.id.clone();
-        el = el.child(canvas(move |b, _, _| { bounds_map.borrow_mut().insert(id, b); }, |_, _, _, _| {}).absolute().size_full());
+        let prefix_anchor = self.prefix_anchor().is_some_and(|anchor| anchor.id == n.id);
+        let view = cx.entity().downgrade();
+        el = el.child(canvas(move |b, window, cx| {
+            let previous = bounds_map.borrow_mut().insert(id, b);
+            if prefix_anchor && previous.map(|b| b.left()) != Some(b.left()) && window.has_pending_keystrokes() {
+                // Bounds settle during layout; update the bar on the next frame.
+                cx.defer(move |cx| { let _ = view.update(cx, |_, cx| cx.notify()); });
+            }
+        }, |_, _, _, _| {}).absolute().size_full());
         el = apply_look(el, n, focused.contains(&n.id));
         if n.window_drag {
             el = self.window_drag(el, cx);
@@ -4485,6 +4500,9 @@ impl Render for AppWindow {
         let tree = self.window_frame(tree, window, cx);
         let overlays = self.render_overlays(window.viewport_size(), cx);
         let pending = crate::keys::pending_keys(window);
+        let prefix_left = if pending.is_empty() { px(0.0) } else {
+            self.prefix_anchor().and_then(|anchor| self.bounds.borrow().get(&anchor.id).map(|b| b.left())).unwrap_or(px(0.0))
+        };
         let tracker = self.float_tracker(cx);
         let win_tracker = self.window_tracker(cx);
         let pane_drag = self.pane_drag_layer(cx);
@@ -4542,7 +4560,7 @@ impl Render for AppWindow {
             .children(tracker)
             .children(win_tracker)
             .when(!pending.is_empty(), |root| root.child(
-                div().id("prefix-bar").absolute().bottom_0().left_0().right_0()
+                div().id("prefix-bar").absolute().bottom_0().left(prefix_left).right_0()
                     .flex().items_center().gap(settings::z(16.0))
                     .px(settings::z(10.0)).py(settings::z(5.0))
                     .bg(c("popover")).border_t_1().border_color(c("border"))

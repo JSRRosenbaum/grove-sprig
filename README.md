@@ -114,8 +114,10 @@ Save a personal layout, mod or key file and the window reloads it.
 A broken edit keeps the last good version and reports the error.
 
 Ctrl+Shift+P shows every command and its key (Cmd+Shift+P on macOS). Change any key in `keys.json`; see [the keys section](defaults/AGENTS.md#keys-keysjson) of the mod guide for the format.
-The Rowan fork shows a window-local **PREFIX** bar along the bottom edge, with
-configured cancellation/help hints derived from GPUI's actual pending keymap.
+The Rowan fork shows a window-local **PREFIX** bar along the bottom of the main
+content, left-aligned after the visible sidebar and tracking its measured edge
+when resized. It never covers the sidebar. Cancellation/help hints come from
+GPUI's actual pending keymap.
 App chords with an applicable Escape continuation stay armed until the next key
 or cancellation; ordinary chords keep their normal timeout. The searchable key
 guide shows active-layout/terminal precedence and readable action names.
