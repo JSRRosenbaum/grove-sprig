@@ -9,8 +9,9 @@
 - `herdr-app windows` lists live windows; `--window <id>` explicitly targets CLI
   inspection and commands. Ambiguous requests fail instead of guessing a window.
 - Automatic completion/blocked sounds have one owner across windows.
-- Pending native chords show a window-local PREFIX indicator. App chords with an
-  effective Escape continuation stay armed until completion or cancellation.
+- Pending native chords show a full-width bottom PREFIX bar with applicable
+  cancellation/help hints. App chords with an effective Escape continuation
+  stay armed until completion or cancellation.
 - The key guide filters to the active layout and terminal binding precedence,
   uses readable action labels, and searches both shortcuts and actions.
 

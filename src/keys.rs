@@ -212,6 +212,29 @@ pub(crate) fn pending_keys(window: &gpui::Window) -> Vec<String> {
     window.pending_input_keystrokes().unwrap_or_default().iter().map(gpui::Keystroke::unparse).collect()
 }
 
+/// Only advertise continuations that the native focused-context keymap can run.
+pub(crate) fn prefix_hints(window: &gpui::Window) -> Vec<(String, &'static str)> {
+    let Some(pending) = window.pending_input_keystrokes() else { return Vec::new() };
+    let mut cancel = Vec::new();
+    let mut help = Vec::new();
+    for binding in window.possible_bindings_for_input(pending) {
+        let Some(action) = gpui_shell::action::script_id(binding.action().as_any()) else { continue };
+        let keys = &binding.keystrokes()[pending.len()..];
+        if action == "app.help" {
+            help.push(keys.iter().map(|key| key.unparse()).collect::<Vec<_>>().join(" "));
+        } else if action.ends_with(".prefix-cancel") && keys.len() == 1 && keys[0].unparse() == "escape" {
+            cancel.push("esc".to_owned());
+        }
+    }
+    let mut hints = Vec::new();
+    for (mut keys, label) in [(cancel, "cancel"), (help, "keybinds")] {
+        keys.sort();
+        keys.dedup();
+        if !keys.is_empty() { hints.push((keys.join(" / "), label)); }
+    }
+    hints
+}
+
 #[cfg(test)]
 mod tests {
     use gpui::{div, Context, FocusHandle, IntoElement, KeyBinding, Render, Subscription, TestAppContext, Window};
