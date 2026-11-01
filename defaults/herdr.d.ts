@@ -244,6 +244,10 @@ export function window(): {
   maximized: boolean;
   fullscreen: boolean;
   active: boolean;
+  /** Name of the layout currently shown in this window. */
+  layout_name: string;
+  /** GPUI's currently pending chord, in canonical keystroke notation. */
+  pending_keys: string[];
 };
 
 /** For a floating mod: where it sits now. `vertical` on the left/right edges, horizontal on

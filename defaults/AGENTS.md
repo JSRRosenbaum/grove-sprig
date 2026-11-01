@@ -499,6 +499,15 @@ the build doesn't do.
 - Sections: `global`, `layout:<name>` (while `layouts/<name>.json` shows),
   `terminal` (a terminal has focus), `mod:<name>`. The more specific section
   wins: `layout:terminals` over `global`, `terminal` over both.
+- Space-separated strokes form a chord (`ctrl-space c`). The Rowan fork shows
+  GPUI's real pending chord in a non-focusable PREFIX indicator. If a currently
+  applicable app chord has an Escape continuation (`ctrl-space escape`), its
+  timeout is paused until completion/cancellation; other chords keep GPUI's timeout.
+  Focus changes, OS-window deactivation, and unmatched continuations clear it.
+- `app.help` opens the searchable key guide for the current layout and normal
+  terminal workflow; terminal bindings override layout bindings, then globals.
+  Mod-only bindings are separately labeled. `herdr.window().layout_name` and
+  `.pending_keys` expose the native state to mods; CLI `status` includes both.
 - An action is a command (`name`, or `name:value`: the value fills the
   command's first argument), `send:<text>` (types into the terminal),
   `<mod>.<command>` (delivered to that mod's `nextCommand()`), or `terminal`

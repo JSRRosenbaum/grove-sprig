@@ -26,6 +26,13 @@ the uniquely active one is used; ambiguous requests fail and require a selector.
 A missing explicit ID never falls back to another window. Window selection,
 mod state, layout clicks and placement are independent; core spaces/tabs/splits
 and configuration edits are shared. Closing a window leaves core terminals live.
+`status.pending_keys` reports GPUI's actual pending chord, never a simulated mod
+timer. The window shows PREFIX while it is pending. Configured app chords with an
+effective Escape continuation remain armed until completion/cancellation; ordinary
+chords retain GPUI's timeout. OS deactivation clears the chord without moving focus.
+`status.layout_name` and `herdr.window().layout_name` identify the active key layout.
+`app.help` opens a searchable guide with terminal/layout/global precedence and
+explicit mod-only scopes; the person's configured help shortcut may differ.
 Do not stop, signal or restart the person's app or core without authorization.
 
 ## Show something when asked

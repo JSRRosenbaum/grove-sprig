@@ -444,6 +444,9 @@ pub struct AppWindow {
     _tasks: Vec<Task<()>>,
     /// Gives the keyboard back when what had it leaves the screen (`restore_focus`).
     _focus_lost: Option<Subscription>,
+    /// Window-local subscription to GPUI's authoritative pending input.
+    _pending_input: Option<Subscription>,
+    _pending_activation: Option<Subscription>,
     /// Remembers where the window is (`place.rs`); the write waiting to settle.
     _place: Option<Subscription>,
     place_write: Option<Task<()>>,
@@ -523,10 +526,23 @@ impl AppWindow {
             focus: cx.focus_handle(),
             _tasks: Vec::new(),
             _focus_lost: None,
+            _pending_input: None,
+            _pending_activation: None,
             _place: None,
             place_write: None,
         };
         w._focus_lost = Some(cx.on_focus_lost(window, |this, window, cx| this.restore_focus(window, cx)));
+        w._pending_input = Some(cx.observe_pending_input(window, |_, window, cx| {
+            crate::keys::hold_cancelable_prefix(window, &cx.entity(), cx);
+            cx.notify();
+        }));
+        w._pending_activation = Some(cx.observe_window_activation(window, |_, window, cx| {
+            if !window.is_window_active() && window.has_pending_keystrokes() {
+                // Discard the chord without changing or restoring internal focus.
+                window.clear_pending_keystrokes(cx);
+            }
+            cx.notify();
+        }));
         w._place = Some(cx.observe_window_bounds(window, |this, window, cx| {
             if let Some(t) = crate::place::changed(window, cx) {
                 this.place_write = Some(t);
@@ -858,6 +874,7 @@ impl AppWindow {
                     }
                 }
             }
+            crate::keys::hold_cancelable_prefix(window, &cx.entity(), cx);
             self.watched.keys = mtime(&crate::keys::path());
         }
         let p_time = mtime(&crate::programs::path());
@@ -3450,6 +3467,8 @@ impl AppWindow {
                 "tab": self.model.active_tab().map(|c| c.id.clone()),
                 "focused_pane": self.focused_pane,
                 "layout": self.layout_name,
+                "layout_name": self.layout_name,
+                "pending_keys": crate::keys::pending_keys(window),
                 "agent": self.shown_agent(),
                 "floats": self.float_status(),
                 "overlays": self.overlays.iter().map(|o| match &o.layout {
@@ -4465,6 +4484,7 @@ impl Render for AppWindow {
         let tree = self.render_node(&self.chrome, &focused, None, cx);
         let tree = self.window_frame(tree, window, cx);
         let overlays = self.render_overlays(window.viewport_size(), cx);
+        let pending = crate::keys::pending_keys(window);
         let tracker = self.float_tracker(cx);
         let win_tracker = self.window_tracker(cx);
         let pane_drag = self.pane_drag_layer(cx);
@@ -4521,6 +4541,13 @@ impl Render for AppWindow {
             .children(overlays)
             .children(tracker)
             .children(win_tracker)
+            .when(!pending.is_empty(), |root| root.child(
+                div().absolute().top(settings::z(12.0)).right(settings::z(16.0))
+                    .px(settings::z(10.0)).py(settings::z(5.0)).rounded_lg()
+                    .bg(c("popover")).border_1().border_color(c("border"))
+                    .text_color(c("foreground")).text_size(settings::z(12.0))
+                    .child(format!("PREFIX  {}", pending.join(" ")))
+            ))
             .child(pane_drag)
             .child(crate::bench::frame_end())
     }

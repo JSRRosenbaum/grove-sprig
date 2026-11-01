@@ -193,8 +193,118 @@ pub fn install(bindings: Vec<KeyBinding>, cx: &mut App) {
     ]);
 }
 
+/// Keep a configured, currently dispatchable app chord alive only when Escape
+/// actually completes it. GPUI remains the source of truth for both the
+/// pending sequence and the effective bindings in the focused context.
+pub(crate) fn hold_cancelable_prefix<T: 'static>(window: &mut gpui::Window, owner: &gpui::Entity<T>, cx: &mut App) {
+    let hold = window.pending_input_keystrokes().is_some_and(|pending| {
+        window.possible_bindings_for_input(pending).iter().any(|binding| {
+            let strokes = binding.keystrokes();
+            strokes.len() == pending.len() + 1
+                && strokes.last().is_some_and(|key| key.unparse() == "escape")
+                && gpui_shell::action::script_id(binding.action().as_any()).is_some()
+        })
+    });
+    window.set_pending_input_timeout_paused(owner, hold, cx);
+}
+
+pub(crate) fn pending_keys(window: &gpui::Window) -> Vec<String> {
+    window.pending_input_keystrokes().unwrap_or_default().iter().map(gpui::Keystroke::unparse).collect()
+}
+
 #[cfg(test)]
 mod tests {
+    use gpui::{div, Context, FocusHandle, IntoElement, KeyBinding, Render, Subscription, TestAppContext, Window};
+    use gpui::prelude::*;
+    use gpui_shell::action::ShellAction;
+
+    struct PendingView {
+        focus: FocusHandle,
+        actions: Vec<String>,
+        changes: usize,
+        _pending: Subscription,
+    }
+
+    impl PendingView {
+        fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+            let pending = cx.observe_pending_input(window, |view, window, cx| {
+                view.changes += 1;
+                super::hold_cancelable_prefix(window, &cx.entity(), cx);
+                cx.notify();
+            });
+            Self { focus: cx.focus_handle(), actions: Vec::new(), changes: 0, _pending: pending }
+        }
+    }
+
+    impl Render for PendingView {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            div().track_focus(&self.focus).key_context("Herdr").on_action(cx.listener(
+                |view, action: &ShellAction, _, _| view.actions.push(action.id().to_owned()),
+            ))
+        }
+    }
+
+    #[gpui::test]
+    fn pending_chords_follow_gpui_transitions(cx: &mut TestAppContext) {
+        cx.update(|cx| cx.bind_keys([
+            KeyBinding::new("ctrl-space", ShellAction::new("test.cancel"), Some("Herdr")),
+            KeyBinding::new("ctrl-space escape", ShellAction::new("test.cancel"), Some("Herdr")),
+            KeyBinding::new("ctrl-space c", ShellAction::new("test.follow"), Some("Herdr")),
+            KeyBinding::new("ctrl-x", ShellAction::new("test.short"), Some("Herdr")),
+            KeyBinding::new("ctrl-x c", ShellAction::new("test.long"), Some("Herdr")),
+        ]));
+        let (view, cx) = cx.add_window_view(PendingView::new);
+        let focus = view.update(cx, |view, _| view.focus.clone());
+        cx.update(|window, cx| {
+            window.focus(&focus, cx);
+            window.activate_window();
+        });
+        cx.run_until_parked();
+
+        cx.simulate_keystrokes("ctrl-space");
+        cx.run_until_parked();
+        cx.update(|window, _| {
+            assert_eq!(super::pending_keys(window), ["ctrl-space"]);
+            assert!(window.pending_input().unwrap().timeout().unwrap().is_paused());
+        });
+        cx.executor().advance_clock(std::time::Duration::from_secs(2));
+        cx.run_until_parked();
+        cx.update(|window, _| assert_eq!(super::pending_keys(window), ["ctrl-space"]));
+        view.read_with(cx, |view, _| assert!(view.changes < 10));
+        cx.simulate_keystrokes("c");
+        cx.run_until_parked();
+        cx.update(|window, _| assert!(super::pending_keys(window).is_empty()));
+        view.read_with(cx, |view, _| assert_eq!(view.actions, ["test.follow"]));
+
+        cx.simulate_keystrokes("ctrl-space escape");
+        cx.run_until_parked();
+        cx.update(|window, _| assert!(super::pending_keys(window).is_empty()));
+        view.read_with(cx, |view, _| assert_eq!(view.actions, ["test.follow", "test.cancel"]));
+
+        cx.simulate_keystrokes("ctrl-space");
+        cx.run_until_parked();
+        cx.simulate_keystrokes("z");
+        cx.run_until_parked();
+        cx.update(|window, _| assert!(super::pending_keys(window).is_empty()));
+        view.read_with(cx, |view, _| assert_eq!(view.actions.iter().filter(|a| a.as_str() == "test.follow").count(), 1));
+
+        cx.simulate_keystrokes("ctrl-space");
+        cx.run_until_parked();
+        cx.update(|window, cx| window.focus(&cx.focus_handle(), cx));
+        cx.run_until_parked();
+        cx.update(|window, _| assert!(super::pending_keys(window).is_empty()));
+        cx.update(|window, cx| window.focus(&focus, cx));
+        cx.run_until_parked();
+
+        cx.simulate_keystrokes("ctrl-x");
+        cx.run_until_parked();
+        cx.update(|window, _| assert!(!window.pending_input().unwrap().timeout().unwrap().is_paused()));
+        cx.executor().advance_clock(std::time::Duration::from_secs(2));
+        cx.run_until_parked();
+        cx.update(|window, _| assert!(super::pending_keys(window).is_empty()));
+        view.read_with(cx, |view, _| assert_eq!(view.actions.last().unwrap(), "test.short"));
+    }
+
     #[test]
     fn keys_from_0_1_0_mean_the_same_now() {
         assert_eq!(super::current("project.select:2"), "space.select:2");

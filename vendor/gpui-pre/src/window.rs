@@ -6192,7 +6192,8 @@ impl Window {
         self.pending_input.is_none()
     }
 
-    pub(crate) fn clear_pending_keystrokes(&mut self, cx: &mut App) {
+    /// Cancel a pending multi-stroke binding without replaying input or changing focus.
+    pub fn clear_pending_keystrokes(&mut self, cx: &mut App) {
         if self.pending_input.take().is_some() {
             self.defer_pending_input_changed(cx);
         }
