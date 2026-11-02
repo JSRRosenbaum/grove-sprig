@@ -87,6 +87,10 @@ fn map_node(node: &mut Node, map: &impl Fn(&str) -> String) {
 }
 
 impl Document {
+    pub fn space_ids(&self) -> impl Iterator<Item = &str> {
+        self.spaces.iter().map(|space| space.id.as_str())
+    }
+
     pub fn capture(model: &Model, machine: Option<&str>) -> Self {
         let map = |s: &str| local(s, machine).to_owned();
         Self {
