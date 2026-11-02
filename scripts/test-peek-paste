@@ -9,6 +9,7 @@ trap 'sandbox down' EXIT
 sandbox up
 export DISPLAY=$(<"$root/display")
 parent=$(sandbox do space.new '{"name":"paste-test"}' | jq -r .terminal)
+sandbox do pane.focus "$(jq -nc --arg terminal "$parent" '{terminal:$terminal}')"
 probe='process.stdin.setRawMode(true);
 process.stdout.write("\x1b[?2004hREADY\r\n");
 let received = Buffer.alloc(0);

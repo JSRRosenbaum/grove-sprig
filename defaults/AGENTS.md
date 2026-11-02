@@ -553,6 +553,9 @@ The main ones:
   `space.close {id?, confirmed?}`, `space.rename {id?, name}` ("": Herdr's name again),
   `space.move {id, index}`, `space.select {index | id}`, `space.next`, `space.prev`.
   With no `argv`, the target core chooses that machine's default shell (PowerShell 7 when available on Windows).
+  Keys and clicks select the new space. CLI/script creation preserves the current
+  workspace, tab and pane; call `space.select {id}` with the returned `space` only
+  when an intentional switch was requested. Do not create-and-restore focus.
 - Tabs: `tab.new {name?, space?, folder?, argv?, task?}` (argv: an
   agent to run, task: its first message). Agents run in your interactive
   shell (including fish), which stays open after the agent exits. A terminal

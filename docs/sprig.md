@@ -2,6 +2,43 @@
 
 Canonical source: https://github.com/JSRRosenbaum/grove-sprig (`main`).
 
+## Background workspace focus repair — 2026-11-02
+
+CLI `space.new` now creates structure without selecting it in the addressed
+window. Its current workspace, tab, pane and explicit machine selection remain
+unchanged; other windows retain their own view too. Keys and clicks still show
+the new workspace. Scripts intentionally switching views use `space.select` on
+the returned `space` ID. Worktrunk and Workthreads were migrated accordingly;
+Workthreads `--no-focus` no longer briefly selects and restores another view.
+Benchmark and recording/test setup callers now select their intended target.
+
+The root causes were unconditional model selection on creation, shared-document
+fallback replacing an intentional empty view, and premature clearing of the
+old pane before focus synchronization. The latter left a hidden terminal's
+keyboard focus live, allowing render to select its old workspace again.
+
+Observed in an actual isolated two-window Linux release run: background local
+and remote creation, shared rename propagation, empty-machine/no-selection
+preservation, Workthreads focus/no-focus, Cua-delivered legacy new-workspace
+keys, and intentional Worktrunk creation/selection all passed. The second
+window remained on its own terminal. Final suites: 304 app unit tests plus
+COLRv1/GPU/contract checks, 47 Python, 50 Node and 27 Bun. The permanent model
+regression checks workspace/tab/pane/zoom preservation and foreground selection.
+
+All builds ran on Ash. Linux app SHA-256:
+`ea4cd0cd731806a1910565b71d1c614074c95246085c2790ca640ee102de02ce`.
+The corrected unsigned Windows package has 307 verified manifest entries on
+Rowan and no dynamic MSVC CRT import. Its SHA-256:
+`cfe770c31eee7093c2bab502ae48911cb27f0c491f0504db1965f60d5f36bee8`.
+The latest Windows artifact was **not executed on Lappy**: its configured
+Windows SSH route went offline. Earlier superseded test results do not qualify it.
+Physical Windows GUI qualification remains outstanding.
+
+Evidence and staged artifacts:
+`/mnt/tank/AppCaches/rowan-dev/sprig-workspace-focus-20261102/`.
+Production frontends, cores and OMP sessions were not stopped or replaced.
+
+
 ## Current adopted upgrade — 2026-11-02
 
 Joseph subsequently authorized **all reviewed upstream improvements**, not just

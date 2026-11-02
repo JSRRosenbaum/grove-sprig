@@ -375,9 +375,11 @@ def main():
 
         if a.set == "spinners":
             for i in range(10):
-                do(bin, "space.new", {"name": f"idle{i}", "folder": ROOT, "argv": reports("idle")})
+                created = do(bin, "space.new", {"name": f"idle{i}", "folder": ROOT, "argv": reports("idle")})
+                do(bin, "space.select", {"id": created["space"]})
                 do(bin, "tab.new", {"argv": reports("idle")})
-            do(bin, "space.new", {"name": "bench", "folder": ROOT, "argv": reports("idle")})
+            created = do(bin, "space.new", {"name": "bench", "folder": ROOT, "argv": reports("idle")})
+            do(bin, "space.select", {"id": created["space"]})
             rows.append(measure("all-idle", app.pid, a.seconds, a.sample))
             do(bin, "tab.new", {"name": "quiet", "argv": reports("quiet")})
             rows.append(measure("spinners", app.pid, a.seconds, a.sample))
@@ -388,7 +390,8 @@ def main():
             do(bin, "tab.new", {"name": "title", "argv": reports("title")})
             rows.append(measure("spinners+title", app.pid, a.seconds, a.sample))
             return
-        do(bin, "space.new", {"name": "bench", "folder": ROOT})
+        created = do(bin, "space.new", {"name": "bench", "folder": ROOT})
+        do(bin, "space.select", {"id": created["space"]})
         rows.append(measure("idle-shell", app.pid, a.seconds, a.sample))
         for layout in ("terminals", "win98", "main"):
             do(bin, "layout.switch", {"name": layout})

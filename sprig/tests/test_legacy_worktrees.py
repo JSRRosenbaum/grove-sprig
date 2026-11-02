@@ -78,7 +78,7 @@ class WorktreeTests(unittest.TestCase):
                 if 'switch' in args:
                     return subprocess.CompletedProcess(args, 0, '{"path":"/new", "branch":"new"}', '')
                 raise AssertionError(args)
-            with self.subTest(action=action), patch.object(module.shutil, 'which', side_effect=lambda name: '/wt' if name == 'wt' else None), patch.object(module, 'run', side_effect=fake_run), patch('builtins.input', return_value='new'), patch.object(module, 'app', side_effect=[{'spaces': []}, {}]):
+            with self.subTest(action=action), patch.object(module.shutil, 'which', side_effect=lambda name: '/wt' if name == 'wt' else None), patch.object(module, 'run', side_effect=fake_run), patch('builtins.input', return_value='new'), patch.object(module, 'app', side_effect=[{'spaces': []}, {'space': 'created'}, {}]):
                 module.worktrunk(self.request(action))
             switch = next(call for call in calls if 'switch' in call)
             self.assertIn('--create', switch)
