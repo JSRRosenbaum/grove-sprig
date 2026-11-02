@@ -139,6 +139,21 @@ impl Tab {
         self.focused.clone().filter(|p| self.root.find(p).is_some()).or_else(|| self.root.panes().first().map(|n| n.id.clone()))
     }
 
+    /// The next pane in layout order, wrapping around.
+    pub fn cycle_pane(&self, forward: bool) -> Option<String> {
+        let panes = self.root.panes();
+        let current = self.focused_pane()?;
+        let index = panes.iter().position(|pane| pane.id == current)?;
+        let next = if forward { (index + 1) % panes.len() } else { (index + panes.len() - 1) % panes.len() };
+        Some(panes[next].id.clone())
+    }
+
+    /// Most recently focused pane that still exists.
+    pub fn last_pane(&self) -> Option<String> {
+        let current = self.focused_pane();
+        self.before.iter().rev().find(|id| Some(id.as_str()) != current.as_deref() && self.root.find(id).is_some()).cloned()
+    }
+
     /// What's drawn: only the zoomed pane when one is zoomed.
     pub fn shown(&self) -> &Node {
         self.zoomed.as_deref().and_then(|z| self.root.find(z)).unwrap_or(&self.root)
@@ -797,6 +812,30 @@ mod tests {
         assert_eq!(m.focused_pane().as_deref(), Some("x1"));
         // The arrangement keeps the tab's id with one pane left.
         assert_eq!(m.active_tab().unwrap().root.id, "c1");
+    }
+
+    #[test]
+    fn legacy_pane_cycle_last_and_resize_change_real_layout() {
+        let mut m = model_with_one();
+        assert!(m.split("x1", Axis::Row, "x2", "t2"));
+        let tab = m.active_tab().unwrap();
+        assert_eq!(tab.cycle_pane(true).as_deref(), Some("x1"));
+        assert_eq!(tab.cycle_pane(false).as_deref(), Some("x1"));
+        assert_eq!(tab.last_pane().as_deref(), Some("x1"));
+        let tab_id = tab.id.clone();
+        let tab = m.tab_mut(&tab_id).unwrap();
+        let before = tab.root.clone();
+        assert!(!tab.root.resize_pane("x2", "down"));
+        assert_eq!(tab.root, before);
+        assert!(tab.root.resize_pane("x2", "left"));
+        assert_ne!(tab.root, before);
+        let x1 = tab.root.find("x1").unwrap().size;
+        let x2 = tab.root.find("x2").unwrap().size;
+        assert!(matches!((x1, x2), (Some(crate::layout::Size::Weight { weight: a }), Some(crate::layout::Size::Weight { weight: b })) if a < b));
+        tab.root.find_mut("x1").unwrap().resizable = Some(false);
+        let guarded = tab.root.clone();
+        assert!(!tab.root.resize_pane("x2", "left"));
+        assert_eq!(tab.root, guarded);
     }
 
     #[test]

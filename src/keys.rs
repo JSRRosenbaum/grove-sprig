@@ -20,6 +20,62 @@ use gpui::{App, KeyBinding, KeyBindingContextPredicate, NoAction};
 use std::rc::Rc;
 use gpui_shell::action::ShellAction;
 use std::collections::BTreeMap;
+use std::cell::RefCell;
+use serde::Deserialize;
+
+/// Legacy profile bindings are plain `key -> action` strings; the active
+/// keys.json uses typed bindings, so the two shapes stay separate.
+type LegacySections = BTreeMap<String, BTreeMap<String, String>>;
+
+#[derive(Clone, Default, Deserialize)]
+struct LegacyProfile {
+    #[serde(default)]
+    bindings: LegacySections,
+    #[serde(default)]
+    ui: BTreeMap<String, bool>,
+}
+
+#[derive(Default, Deserialize)]
+struct LegacyProfiles {
+    #[serde(flatten)]
+    local: LegacyProfile,
+    #[serde(default)]
+    remote_default: LegacyProfile,
+    #[serde(default)]
+    machines: BTreeMap<String, LegacyProfile>,
+}
+
+thread_local! {
+    static LEGACY: RefCell<Option<LegacyProfiles>> = const { RefCell::new(None) };
+}
+
+fn profile<'a>(profiles: &'a LegacyProfiles, machine: Option<&str>) -> Option<&'a LegacyProfile> {
+    match machine.filter(|m| !m.is_empty()) {
+        None => Some(&profiles.local),
+        Some(machine) => Some(profiles.machines.get(machine).unwrap_or(&profiles.remote_default)),
+    }
+}
+
+/// Stable predicate identifiers contain no user-controlled context syntax.
+pub(crate) fn legacy_profile(machine: Option<&str>) -> String {
+    LEGACY.with_borrow(|profiles| {
+        let Some(machine) = machine.filter(|m| !m.is_empty()) else { return "local".into(); };
+        profiles.as_ref().and_then(|profiles| profiles.machines.keys().position(|name| name == machine))
+            .map(|index| format!("machine{index}")).unwrap_or_else(|| "remote".into())
+    })
+}
+
+pub(crate) fn listing_for(machine: Option<&str>, legacy: bool) -> Vec<(String, String, String)> {
+    if !legacy { return listing(); }
+    LEGACY.with_borrow(|profiles| {
+        let Some(profiles) = profiles else {
+            return listing().into_iter().filter(|(s, _, _)| matches!(s.as_str(), "layout:rowan-terminal" | "mod:rowan-navigate")).collect();
+        };
+        profile(profiles, machine).map(|profile| profile.bindings.iter()
+            .flat_map(|(section, bindings)| bindings.iter().map(move |(key, action)| (section.clone(), key.clone(), current(action))))
+            .collect()).unwrap_or_default()
+    })
+}
 
 /// The reserved shortcut that restores the default layout and keys.
 pub const ESCAPE_HATCH: &str = "ctrl-alt-shift-escape";
@@ -111,6 +167,12 @@ pub fn path() -> std::path::PathBuf {
     crate::mods::app_dir().join("keys.json")
 }
 
+/// Effective legacy UI option, with the original default if metadata is absent.
+pub(crate) fn legacy_ui(machine: Option<&str>, name: &str, default: bool) -> bool {
+    LEGACY.with_borrow(|profiles| profiles.as_ref().and_then(|p| profile(p, machine))
+        .and_then(|p| p.ui.get(name)).copied().unwrap_or(default))
+}
+
 /// The GPUI key tab a section applies in. `global` is the window itself,
 /// not "no tab": GPUI ranks a binding without one above every other, so
 /// it would beat `layout:` (same depth, added earlier) and only lose to
@@ -168,7 +230,26 @@ pub fn load() -> Result<Vec<KeyBinding>, String> {
     let originals = SHIPPED_KEYS;
     #[cfg(target_os = "macos")]
     let originals = SHIPPED_MACOS_KEYS;
-    parse(&load_text(&path(), DEFAULTS, originals)?)
+    let text = load_text(&path(), DEFAULTS, originals)?;
+    let metadata = crate::mods::app_dir().join("legacy-keys.json");
+    if !metadata.exists() {
+        let bindings = parse(&text)?;
+        LEGACY.with_borrow_mut(|profiles| *profiles = None);
+        return Ok(bindings);
+    }
+    let profiles: LegacyProfiles = serde_json::from_str(&std::fs::read_to_string(metadata).map_err(|e| e.to_string())?)
+        .map_err(|e| format!("legacy-keys.json: {e}"))?;
+    let mut ordinary: Sections = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+    ordinary.remove("layout:rowan-terminal");
+    ordinary.remove("mod:rowan-navigate");
+    let mut bindings = parse_scoped(&serde_json::to_string(&ordinary).map_err(|e| e.to_string())?, Some("Herdr && !HerdrLegacy"))?;
+    for (id, profile) in std::iter::once(("local".to_owned(), &profiles.local))
+        .chain(std::iter::once(("remote".to_owned(), &profiles.remote_default)))
+        .chain(profiles.machines.values().enumerate().map(|(index, profile)| (format!("machine{index}"), profile))) {
+        bindings.extend(parse_legacy_scoped(&profile.bindings, &format!("HerdrLegacy && legacy_profile == {id}"))?);
+    }
+    LEGACY.with_borrow_mut(|stored| *stored = Some(profiles));
+    Ok(bindings)
 }
 
 fn load_text(path: &std::path::Path, defaults: &str, originals: &[&str]) -> Result<String, String> {
@@ -188,12 +269,19 @@ fn load_text(path: &std::path::Path, defaults: &str, originals: &[&str]) -> Resu
 }
 
 pub fn parse(text: &str) -> Result<Vec<KeyBinding>, String> {
+    parse_scoped(text, None)
+}
+
+fn parse_scoped(text: &str, scope: Option<&str>) -> Result<Vec<KeyBinding>, String> {
     let sections: Sections = serde_json::from_str(text).map_err(|e| e.to_string())?;
     let mut out = Vec::new();
     let mut problems = Vec::new();
     for (section, keys) in &sections {
         let ctx = match tab(section) {
-            Ok(c) => c,
+            Ok(c) => scope.map_or(c.clone(), |scope| {
+                let relation = if section == "terminal" || section.starts_with("mod:") { ">" } else { "&&" };
+                format!("({scope}) {relation} ({c})")
+            }),
             Err(e) => {
                 problems.push(e);
                 continue;
@@ -250,6 +338,50 @@ pub fn parse(text: &str) -> Result<Vec<KeyBinding>, String> {
     if problems.is_empty() { Ok(out) } else { Err(problems.join("; ")) }
 }
 
+/// The legacy profile's plain string bindings, scoped to its compiled predicate.
+fn parse_legacy_scoped(sections: &LegacySections, scope: &str) -> Result<Vec<KeyBinding>, String> {
+    let mut out = Vec::new();
+    let mut problems = Vec::new();
+    for (section, keys) in sections {
+        let base = tab(section)?;
+        let relation = if section == "terminal" || section.starts_with("mod:") { ">" } else { "&&" };
+        let ctx = format!("({scope}) {relation} ({base})");
+        for (keys, action) in keys {
+            if gone_mod(action) {
+                continue;
+            }
+            if !valid_action(action) {
+                problems.push(format!("{section}.{keys}: unknown action {action:?}"));
+                continue;
+            }
+            let predicate = match KeyBindingContextPredicate::parse(&ctx) {
+                Ok(p) => Some(Rc::new(p)),
+                Err(e) => {
+                    problems.push(format!("{section}: {e}"));
+                    continue;
+                }
+            };
+            #[cfg(target_os = "macos")]
+            let native = crate::macos::action(action);
+            #[cfg(not(target_os = "macos"))]
+            let native: Option<Box<dyn gpui::Action>> = None;
+            let action: Box<dyn gpui::Action> = if action == "terminal" {
+                if section == "global" {
+                    continue;
+                }
+                Box::new(NoAction)
+            } else {
+                native.unwrap_or_else(|| Box::new(ShellAction::new(action.clone())))
+            };
+            match KeyBinding::load(keys, action, predicate, false, None, &gpui::DummyKeyboardMapper) {
+                Ok(b) => out.push(b),
+                Err(e) => problems.push(format!("{section}.{keys}: {e}")),
+            }
+        }
+    }
+    if problems.is_empty() { Ok(out) } else { Err(problems.join("; ")) }
+}
+
 /// The UI kit's own keys (text editing in inputs, lists): bound at its init,
 /// kept across every reload of keys.json.
 struct KitKeys(Vec<KeyBinding>);
@@ -266,11 +398,67 @@ pub fn install(bindings: Vec<KeyBinding>, cx: &mut App) {
     cx.bind_keys(kit);
     cx.bind_keys(bindings);
     cx.bind_keys([
-        KeyBinding::new(ESCAPE_HATCH, ShellAction::new("app.reset"), None),
+        KeyBinding::new(ESCAPE_HATCH, ShellAction::new("app.reset"), Some("Herdr && !HerdrLegacy")),
         KeyBinding::new("escape", ShellAction::new("overlay.close"), Some("Overlay")),
     ]);
 }
 
+/// Keep a configured, currently dispatchable app chord alive only when Escape
+/// actually completes it. GPUI remains the source of truth for both the
+/// pending sequence and the effective bindings in the focused context.
+pub(crate) fn hold_cancelable_prefix<T: 'static>(window: &mut gpui::Window, owner: &gpui::Entity<T>, cx: &mut App) {
+    let hold = window.pending_input_keystrokes().is_some_and(|pending| {
+        window.possible_bindings_for_input(pending).iter().any(|binding| {
+            let strokes = binding.keystrokes();
+            strokes.len() == pending.len() + 1
+                && strokes.last().is_some_and(|key| key.unparse() == "escape")
+                && gpui_shell::action::script_id(binding.action().as_any()).is_some()
+        })
+    });
+    window.set_pending_input_timeout_paused(owner, hold, cx);
+}
+
+/// Consume an unknown legacy continuation before GPUI can replay the prefix.
+pub(crate) fn consume_unknown_legacy(window: &mut gpui::Window, key: &gpui::Keystroke, cx: &mut App) -> bool {
+    let Some(pending) = window.pending_input_keystrokes() else { return false };
+    let possible = window.possible_bindings_for_input(pending);
+    let legacy = possible.iter().any(|binding|
+        gpui_shell::action::script_id(binding.action().as_any()) == Some("legacy.prefix_cancel"));
+    let mut candidate = pending.to_vec();
+    candidate.push(key.clone());
+    if legacy && !possible.iter().any(|binding| binding.match_keystrokes(&candidate).is_some()) {
+        window.clear_pending_keystrokes(cx);
+        return true;
+    }
+    false
+}
+
+pub(crate) fn pending_keys(window: &gpui::Window) -> Vec<String> {
+    window.pending_input_keystrokes().unwrap_or_default().iter().map(gpui::Keystroke::unparse).collect()
+}
+
+/// Only advertise continuations that the native focused-context keymap can run.
+pub(crate) fn prefix_hints(window: &gpui::Window) -> Vec<(String, &'static str)> {
+    let Some(pending) = window.pending_input_keystrokes() else { return Vec::new() };
+    let mut cancel = Vec::new();
+    let mut help = Vec::new();
+    for binding in window.possible_bindings_for_input(pending) {
+        let Some(action) = gpui_shell::action::script_id(binding.action().as_any()) else { continue };
+        let keys = &binding.keystrokes()[pending.len()..];
+        if action == "app.help" {
+            help.push(keys.iter().map(|key| key.unparse()).collect::<Vec<_>>().join(" "));
+        } else if action.ends_with(".prefix-cancel") && keys.len() == 1 && keys[0].unparse() == "escape" {
+            cancel.push("esc".to_owned());
+        }
+    }
+    let mut hints = Vec::new();
+    for (mut keys, label) in [(cancel, "cancel"), (help, "keybinds")] {
+        keys.sort();
+        keys.dedup();
+        if !keys.is_empty() { hints.push((keys.join(" / "), label)); }
+    }
+    hints
+}
 #[cfg(test)]
 mod tests {
     #[test]
@@ -301,6 +489,183 @@ mod tests {
             assert_eq!(std::fs::read_to_string(&path).unwrap(), defaults);
         }
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    struct PendingView {
+        focus: FocusHandle,
+        context: String,
+        leaf_context: Option<&'static str>,
+        actions: Vec<String>,
+        raw: Vec<String>,
+        changes: usize,
+        _pending: Subscription,
+    }
+
+    impl PendingView {
+        fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+            let pending = cx.observe_pending_input(window, |view, window, cx| {
+                view.changes += 1;
+                super::hold_cancelable_prefix(window, &cx.entity(), cx);
+                cx.notify();
+            });
+            Self { focus: cx.focus_handle(), context: "Herdr".into(), leaf_context: None, actions: Vec::new(), raw: Vec::new(), changes: 0, _pending: pending }
+        }
+    }
+
+    impl Render for PendingView {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            div().key_context(self.context.as_str())
+                .when(self.leaf_context.is_none(), |d| d.track_focus(&self.focus))
+                .when_some(self.leaf_context, |d, context| d.child(div().key_context(context).track_focus(&self.focus)))
+                .on_key_down(cx.listener(|view, event: &gpui::KeyDownEvent, _, _| view.raw.push(event.keystroke.unparse())))
+                .on_action(cx.listener(|view, action: &ShellAction, _, _| view.actions.push(action.id().to_owned())))
+        }
+    }
+
+    #[gpui::test]
+    fn pending_chords_follow_gpui_transitions(cx: &mut TestAppContext) {
+        cx.update(|cx| cx.bind_keys([
+            KeyBinding::new("ctrl-space", ShellAction::new("test.cancel"), Some("Herdr")),
+            KeyBinding::new("ctrl-space escape", ShellAction::new("test.cancel"), Some("Herdr")),
+            KeyBinding::new("ctrl-space c", ShellAction::new("test.follow"), Some("Herdr")),
+            KeyBinding::new("ctrl-x", ShellAction::new("test.short"), Some("Herdr")),
+            KeyBinding::new("ctrl-x c", ShellAction::new("test.long"), Some("Herdr")),
+        ]));
+        let (view, cx) = cx.add_window_view(PendingView::new);
+        let focus = view.update(cx, |view, _| view.focus.clone());
+        cx.update(|window, cx| {
+            window.focus(&focus, cx);
+            window.activate_window();
+        });
+        cx.run_until_parked();
+
+        cx.simulate_keystrokes("ctrl-space");
+        cx.run_until_parked();
+        cx.update(|window, _| {
+            assert_eq!(super::pending_keys(window), ["ctrl-space"]);
+            assert!(window.pending_input().unwrap().timeout().unwrap().is_paused());
+        });
+        cx.executor().advance_clock(std::time::Duration::from_secs(2));
+        cx.run_until_parked();
+        cx.update(|window, _| assert_eq!(super::pending_keys(window), ["ctrl-space"]));
+        view.read_with(cx, |view, _| assert!(view.changes < 10));
+        cx.simulate_keystrokes("c");
+        cx.run_until_parked();
+        cx.update(|window, _| assert!(super::pending_keys(window).is_empty()));
+        view.read_with(cx, |view, _| assert_eq!(view.actions, ["test.follow"]));
+
+        cx.simulate_keystrokes("ctrl-space escape");
+        cx.run_until_parked();
+        cx.update(|window, _| assert!(super::pending_keys(window).is_empty()));
+        view.read_with(cx, |view, _| assert_eq!(view.actions, ["test.follow", "test.cancel"]));
+
+        cx.simulate_keystrokes("ctrl-space");
+        cx.run_until_parked();
+        cx.simulate_keystrokes("z");
+        cx.run_until_parked();
+        cx.update(|window, _| assert!(super::pending_keys(window).is_empty()));
+        view.read_with(cx, |view, _| assert_eq!(view.actions.iter().filter(|a| a.as_str() == "test.follow").count(), 1));
+
+        cx.simulate_keystrokes("ctrl-space");
+        cx.run_until_parked();
+        cx.update(|window, cx| window.focus(&cx.focus_handle(), cx));
+        cx.run_until_parked();
+        cx.update(|window, _| assert!(super::pending_keys(window).is_empty()));
+        cx.update(|window, cx| window.focus(&focus, cx));
+        cx.run_until_parked();
+
+        cx.simulate_keystrokes("ctrl-x");
+        cx.run_until_parked();
+        cx.update(|window, _| assert!(!window.pending_input().unwrap().timeout().unwrap().is_paused()));
+        cx.executor().advance_clock(std::time::Duration::from_secs(2));
+        cx.run_until_parked();
+        cx.update(|window, _| assert!(super::pending_keys(window).is_empty()));
+        view.read_with(cx, |view, _| assert_eq!(view.actions.last().unwrap(), "test.short"));
+    }
+
+    #[gpui::test]
+    fn legacy_unknown_continuation_is_not_replayed_to_focused_input(cx: &mut TestAppContext) {
+        cx.update(|cx| cx.bind_keys([
+            KeyBinding::new("ctrl-space escape", ShellAction::new("legacy.prefix_cancel"), Some("Herdr")),
+            KeyBinding::new("ctrl-space c", ShellAction::new("test.follow"), Some("Herdr")),
+        ]));
+        let (view, cx) = cx.add_window_view(PendingView::new);
+        let focus = view.update(cx, |view, _| view.focus.clone());
+        let interceptor = cx.update(|window, cx| {
+            let id = window.window_handle().window_id();
+            window.focus(&focus, cx);
+            cx.intercept_keystrokes(move |event, window, cx| {
+                if window.window_handle().window_id() == id && super::consume_unknown_legacy(window, &event.keystroke, cx) {
+                    cx.stop_propagation();
+                }
+            })
+        });
+        cx.run_until_parked();
+        cx.simulate_keystrokes("ctrl-space z");
+        cx.run_until_parked();
+        cx.update(|window, _| assert!(super::pending_keys(window).is_empty()));
+        view.read_with(cx, |view, _| assert!(view.raw.is_empty()));
+        cx.simulate_keystrokes("ctrl-space c");
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| assert_eq!(view.actions, ["test.follow"]));
+        drop(interceptor);
+    }
+
+    #[gpui::test]
+    fn endpoint_profiles_do_not_steal_another_windows_shortcuts(cx: &mut TestAppContext) {
+        let text = |action| serde_json::json!({"layout:rowan-terminal":{"ctrl-alt-up":action}}).to_string();
+        let mut bindings = super::parse_scoped(&text("space.prev"), Some("HerdrLegacy && legacy_profile == local")).unwrap();
+        bindings.extend(super::parse_scoped(&text("pane.go:up"), Some("HerdrLegacy && legacy_profile == machine0")).unwrap());
+        bindings.extend(super::parse_scoped(r#"{"global":{"ctrl-shift-t":"tab.new"}}"#, Some("!HerdrLegacy")).unwrap());
+        cx.update(|cx| cx.bind_keys(bindings));
+        let (view, cx) = cx.add_window_view(PendingView::new);
+        let focus = view.update(cx, |view, _| {
+            view.context = "Herdr HerdrLegacy layout = rowan-terminal legacy_profile = local".into();
+            view.focus.clone()
+        });
+        cx.update(|window, cx| window.focus(&focus, cx));
+        cx.simulate_keystrokes("ctrl-alt-up ctrl-shift-t");
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.actions, ["space.prev"]);
+            assert_eq!(view.raw, ["ctrl-shift-t"]);
+        });
+        view.update(cx, |view, cx| {
+            view.context = "Herdr HerdrLegacy layout = rowan-terminal legacy_profile = machine0".into();
+            cx.notify();
+        });
+        cx.run_until_parked();
+        cx.simulate_keystrokes("ctrl-alt-up");
+        view.read_with(cx, |view, _| assert_eq!(view.actions, ["space.prev", "pane.go:up"]));
+        view.update(cx, |view, cx| {
+            view.context = "Herdr HerdrLegacy layout = rowan-terminal legacy_profile = unknown".into();
+            cx.notify();
+        });
+        cx.run_until_parked();
+        cx.simulate_keystrokes("ctrl-alt-up");
+        view.read_with(cx, |view, _| assert_eq!(view.actions, ["space.prev", "pane.go:up"]));
+    }
+
+    #[gpui::test]
+    fn endpoint_mod_bindings_match_the_focused_descendant_only(cx: &mut TestAppContext) {
+        let bindings = super::parse_scoped(r#"{"mod:rowan-navigate":{"down":"space.next"}}"#,
+            Some("HerdrLegacy && legacy_profile == local")).unwrap();
+        cx.update(|cx| cx.bind_keys(bindings));
+        let (view, cx) = cx.add_window_view(PendingView::new);
+        let focus = view.update(cx, |view, _| {
+            view.context = "Herdr HerdrLegacy layout = rowan-terminal legacy_profile = local".into();
+            view.leaf_context = Some("Mod mod = rowan-navigate");
+            view.focus.clone()
+        });
+        cx.update(|window, cx| window.focus(&focus, cx));
+        cx.simulate_keystrokes("down");
+        view.read_with(cx, |view, _| assert_eq!(view.actions, ["space.next"]));
+        view.update(cx, |view, cx| {
+            view.context = "Herdr HerdrLegacy layout = rowan-terminal legacy_profile = machine0".into();
+            cx.notify();
+        });
+        cx.run_until_parked();
+        cx.simulate_keystrokes("down");
+        view.read_with(cx, |view, _| assert_eq!(view.actions, ["space.next"]));
     }
 
     #[test]

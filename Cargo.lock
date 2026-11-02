@@ -3716,6 +3716,7 @@ dependencies = [
  "notify",
  "png 0.17.16",
  "raw-window-handle",
+ "regex",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -3727,6 +3728,7 @@ dependencies = [
  "tracing-subscriber",
  "ttf-parser",
  "uds_windows",
+ "unicode-segmentation",
  "windows-sys 0.61.2",
  "winresource",
 ]

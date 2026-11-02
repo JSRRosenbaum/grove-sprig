@@ -14,11 +14,30 @@ herdr-app status      # current layout, focus, overlays, zoom and file/mod error
 herdr-app commands    # available commands, arguments and descriptions
 ```
 
-`ls` and `status` talk to the running window, not a new app. `commands`
-prints the built-in command list even without an open window. Do not launch bare
-`herdr-app` to inspect it: that opens or raises the window. Do not stop,
-signal or restart the person's app or core. A window closing does not kill
-its terminals.
+`ls` and `status` talk to a running window, not a new app. `commands`
+prints the built-in command list even without an open window. In the Rowan fork,
+each ordinary `herdr-app` launch opens another independent window using the same
+configuration and core terminals. Never launch it just to inspect.
+
+Use `herdr-app --window <id> status`, `ls`, `shot <file>` or `do <command>` to
+target an ID returned by `windows`. Without a selector, the only live window or
+the uniquely active one is used; ambiguous requests fail and require a selector.
+A missing explicit ID never falls back to another window. Window selection,
+mod state, layout clicks and placement are independent; core spaces/tabs/splits
+and configuration edits are shared. Closing a window leaves core terminals live.
+`status.pending_keys` reports GPUI's actual pending chord, never a simulated mod
+timer. The window shows PREFIX while it is pending. Configured app chords with an
+effective Escape continuation remain armed until completion/cancellation; ordinary
+chords retain GPUI's timeout. OS deactivation clears the chord without moving focus.
+`status.layout_name` and `herdr.window().layout_name` identify the active key layout.
+`app.help` opens the key guide (the legacy guide under `rowan-terminal`);
+the person's configured help shortcut may differ.
+Legacy panes support `pane.rename`, `pane.cycle`, `pane.last`, `pane.resize`,
+and `pane.resize_mode`; `terminal.copy_mode`, `terminal.clear`, and
+`terminal.edit_scrollback` act on the focused terminal. `app.reload` explicitly
+reloads configuration. `agent.select` and `notification.open_target` navigate
+to an indexed agent or a visible notification target.
+Do not stop, signal or restart the person's app or core without authorization.
 
 `app.check_updates` checks for newer releases. Settings reports "Up to date"
 only after a successful check; on failure, check the connection and retry.

@@ -9,6 +9,27 @@
   sidebar, durable repository/worktree grouping, prompt-free New worktree and
   remote clipboard paste on the new upstream base.
 - Source pins are recorded in `sprig/upstreams.json`.
+
+## Sprig legacy interaction parity — 2026-11-02
+
+- Restore original prefix ownership, modal navigation, terminal Go To, keyboard
+  copy/search, pane cycling/resize, rename and field-local kill/yank controls.
+- Compile the original host-specific key profiles and custom commands; newer
+  bindings no longer intercept keys owned by terminal programs.
+- Port annotation/review, Worktrunk, Workthreads and sci-fi grid actions to
+  herdr-core without restarting agents or reinstalling the legacy server.
+- Restore copy-on-release feedback and use Windows' registered URL handler for
+  Ctrl-click links. Build Windows executables with the C runtime linked statically.
+- Clear authoritative terminal history without sending input, preserving the
+  wrapped cursor line and leaving alternate-screen programs unchanged.
+
+- Rebased Sprig onto upstream herdr-app `cfcf836` (released 0.1.13 plus reviewed
+  master fixes), taking upstream code as the base and re-implementing Sprig
+  behavior on top of it.
+- Retained concurrent independent windows, native prefix/help, the compact herd
+  sidebar, durable repository/worktree grouping, prompt-free New worktree and
+  remote clipboard paste on the new upstream base.
+- Source pins are recorded in `sprig/upstreams.json`.
 ## [0.1.13] - 2026-11-04
 <!-- spotlight macos -->
 

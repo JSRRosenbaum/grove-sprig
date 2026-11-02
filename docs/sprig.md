@@ -121,8 +121,10 @@ Always isolate app home, core session, runtime/config/state paths and display;
 never use a production core stop/restart as a test.
 
 The installer validates inputs and ownership, rejects symlinked descendants,
-retains fresh platform shortcuts, prunes only unchanged obsolete overlay bindings,
-and allocates rollback copies before replacement. Caught I/O failures roll back
+and replaces newer global/terminal captures with an explicit legacy key profile.
+Per-machine profiles preserve source-specific plugin availability; normal keys
+and UI preferences remain frontend-local unless server-keymap mode is explicit.
+It allocates rollback copies before replacement. Caught I/O failures roll back
 file bytes without new allocation. Power-loss durability, concurrent installation
 and adversarial directory-swap races are not promised; use an exclusive trusted
 configuration directory. Backups are retained even when an install fails.
@@ -243,3 +245,88 @@ requalified in this consolidation; their existing consumer behavior tests passed
 Rowan's `just`/Bun shims lacked selected installed versions, so Python/Node ran
 directly and the Bun check used Ash's installed runtime. No global tool configuration
 was changed to conceal that limitation.
+
+## Legacy interaction contract — 2026-11-02
+
+The owner requested exact legacy keybinding parity, with newer conflicting
+bindings displaced rather than retained as aliases. The behavior oracle is
+Herdr 0.9.5 at `5ea51c013a3fc6bc783b80caacf0f3a39575e70a`, together with each
+frontend's actual legacy configuration.
+
+Normal bindings, prefix and UI preferences remain frontend-local by default.
+The selected endpoint supplies its custom commands, not its entire keymap.
+`--legacy-key-source server` explicitly selects the full endpoint profile;
+`--legacy-machine-config NAME=PATH` supplies each named endpoint's configuration.
+An unknown endpoint has no inherited local plugin commands. Profiles are selected
+independently in each window.
+
+This ports the real prefix dispatcher, Navigate and per-terminal Go To modes,
+copy/search mode, field kill/yank controls, pane sizing, scrollback editing,
+worktree launchers, annotation editor/manager and configured plugin actions.
+The prefix stays active until consumed or cancelled; unknown suffixes do not leak
+into the shell. The legacy help panel shows the effective map. New global and
+terminal captures are replaced by the installer, with rollback backups.
+
+### Reproducing the paired core
+
+The app's clear-scrollback action requires Sprig's paired core, not an unpatched
+upstream binary. Its source is retained as checksum-pinned patches in this same
+repository, including the separate Ghostty submodule delta:
+
+```sh
+python3 scripts/prepare-sprig-core.py /new/path/sprig-core
+cargo build --locked --release --manifest-path /new/path/sprig-core/Cargo.toml -p herdr-core
+```
+
+The preparation command refuses an existing destination, verifies patch hashes,
+fetches the exact upstream core and renderer revisions, and checks each patch
+before applying it. It does not install anything or touch a running core.
+Use the core's documented Zig/toolchain prerequisites. Build on Ash.
+
+`terminal.clear` clears authoritative primary-screen history while retaining
+the complete visible wrapped cursor line, parser/mode state, hyperlinks and
+palette overrides. Alternate-screen clearing returns false. Clear intent and
+actual pending DEC mode transitions survive slow-viewer loss/resynchronization;
+no shell input is injected to simulate the operation.
+
+### Qualification boundary
+
+The Linux app passed 303 unit tests, 26 COLRv1 tests, command/notice/skill checks
+and both actual GPU pixel-readback checks. Final adapter suites passed 47 Python,
+50 Node and 27 Bun tests. The standalone annotation runtime passed 70 Rust tests;
+the retained review runtime passed 188.
+The final core suite passed serially with `HC_TEST_WATCHDOG_S=180`; its default
+30-second per-binary watchdog is too short for the serialized integration suite.
+The renderer wrapper passed 15 tests, including dirty-prompt clear, hyperlinks
+and explicit palette overrides.
+
+Private Xvfb/Cua runs exercised two independent windows, effective key help,
+held/repeated/cancelled prefix input, pane split/cycle/resize, Navigate, Go To,
+new-tab prompts, clipboard paste followed by Ctrl+C field clearing, empty remote
+machine selection and keyboard-origin source-owned remote launch. The standalone
+annotation editor saved a real record in the private store, and copy-context
+export was read back from the clipboard. The Worktrunk picker created branch
+`wt` and its actual checkout in the owned fixture. All 35 installed mods passed
+native checking. Tests never used the user's display or stopped production
+app/core/OMP sessions. Private Xvfb mouse-drag qualification was blocked by Cua's
+unavailable uinput slave device; no synthetic desktop bypass was substituted.
+
+Windows binaries use static MSVC CRT linkage: a separate VC++ Redistributable is
+not required by these executables. Final native execution on Lappy passed
+58 key/field/copy/link tests plus 3 core clear and 11 wire tests. An isolated
+ConPTY shell accepted `abc`, displayed `SPRIG_INPUT_abc`, then cleared the
+pre-clear marker from authoritative readback. All 306 manifest-listed package
+files matched on Rowan and Lappy.
+SSH session 0 is not an interactive desktop. Physical Windows Ctrl-click,
+mouse-drag selection, rendering and desktop clipboard feedback remain unverified;
+native tests and ConPTY checks do not substitute for those gestures.
+
+Final Linux release source was rebuilt from the canonical core patches and
+byte-compared against the fully qualified source. SHA-256:
+app `5ca53d411a5582ff4145f870719e5ec138fcd104ff1092a0c346c0e94c1c25e6`;
+core `7759757b1a803bd9c7dd8348341e51f757c93675152de068501f1d9b337d3d21`.
+The Windows package SHA-256 is
+`b16b9a45f2bbe7bee1303ab02bac48af0c8aefcb65e5a21f8b40738f18c34233`.
+This parity update is staged separately, not installed over live sessions.
+
+

@@ -6,6 +6,7 @@
 
 use crate::hc::Core;
 mod floats;
+mod legacy_plugins;
 mod movable;
 mod pane_drag;
 mod pane_size;
@@ -312,6 +313,8 @@ struct Overlay {
     /// As designed; drawn at the current zoom. Up to 1: a share of the window.
     size: Size<f32>,
     expires: Option<Instant>,
+    notification_action: Option<Value>,
+    transient_terminal: Option<String>,
     focus: FocusHandle,
     /// Blocks instead of one mod (terminals too), ids prefixed with the overlay's.
     layout: Option<Node>,
@@ -350,6 +353,8 @@ pub struct AppWindow {
     chrome: Node,
     /// Which layout `chrome` is (`layouts/<name>.json`).
     layout_name: String,
+    /// Explicit machine selection, including an empty machine (`""` is local).
+    selected_machine: Option<String>,
     /// The agent an `{ "agent": "focused" }` block shows (by address); any core
     /// terminal, so sub-agents outside workspaces work too.
     agent: Option<String>,
@@ -360,6 +365,7 @@ pub struct AppWindow {
     swapped: HashMap<String, String>,
     float_drag: Option<floats::FloatDrag>,
     pane_drag: Option<pane_drag::PaneDrag>,
+    legacy_resize_pane: Option<String>,
     pane_grip_hover: Option<String>,
     /// Each pane's top row the grip sits centered in: its top header, else a strip.
     pane_grip_rows: RefCell<HashMap<String, f32>>,
@@ -454,6 +460,10 @@ pub struct AppWindow {
     _tasks: Vec<Task<()>>,
     /// Gives the keyboard back when what had it leaves the screen (`restore_focus`).
     _focus_lost: Option<Subscription>,
+    /// Window-local subscription to GPUI's authoritative pending input.
+    _pending_input: Option<Subscription>,
+    _pending_activation: Option<Subscription>,
+    _legacy_keys: Option<Subscription>,
     /// Remembers where the window is (`place.rs`); the write waiting to settle.
     _place: Option<Subscription>,
     place_write: Option<Task<()>>,
@@ -469,11 +479,13 @@ impl AppWindow {
             runtime,
             chrome: default_layout("main"),
             layout_name: "main".into(),
+            selected_machine: None,
             agent: None,
             agent_focused: None,
             swapped: HashMap::new(),
             float_drag: None,
             pane_drag: None,
+            legacy_resize_pane: None,
             pane_grip_hover: None,
             pane_grip_rows: RefCell::default(),
             win_drag: None,
@@ -540,10 +552,101 @@ impl AppWindow {
             focus: cx.focus_handle(),
             _tasks: Vec::new(),
             _focus_lost: None,
+            _pending_input: None,
+            _pending_activation: None,
+            _legacy_keys: None,
             _place: None,
             place_write: None,
         };
         w._focus_lost = Some(cx.on_focus_lost(window, |this, window, cx| this.restore_focus(window, cx)));
+        w._pending_input = Some(cx.observe_pending_input(window, |_, window, cx| {
+            crate::keys::hold_cancelable_prefix(window, &cx.entity(), cx);
+            cx.notify();
+        }));
+        let owner = cx.weak_entity();
+        let window_id = window.window_handle().window_id();
+        w._legacy_keys = Some(cx.intercept_keystrokes(move |event, window, cx| {
+            if window.window_handle().window_id() != window_id { return; }
+            let legacy = owner.upgrade().is_some_and(|view| view.read(cx).layout_name == "rowan-terminal");
+            if !legacy { return; }
+            if let Some(view) = owner.upgrade() && view.read(cx).legacy_resize_pane.is_some() {
+                let stroke = event.keystroke.unparse();
+                let exit_binding = crate::keys::listing_for(view.read(cx).legacy_machine(), true).iter().any(|(section, keys, action)| {
+                    section == "layout:rowan-terminal" && action == "pane.resize_mode"
+                        && keys.split_whitespace().last() == Some(stroke.as_str())
+                });
+                let consume = view.update(cx, |this, cx| {
+                    let pane = this.legacy_resize_pane.clone().unwrap();
+                    let still_focused = this.model.focused_pane().as_deref() == Some(pane.as_str())
+                        && this.terms.get(&pane).is_some_and(|t| t.focus.is_focused(window));
+                    if !still_focused {
+                        this.legacy_resize_pane = None;
+                        cx.notify();
+                        return false;
+                    }
+                    if exit_binding || matches!(stroke.as_str(), "escape" | "enter") {
+                        this.legacy_resize_pane = None;
+                    } else {
+                        let direction = match event.keystroke.key.as_str() {
+                            "h" | "left" => Some("left"), "j" | "down" => Some("down"),
+                            "k" | "up" => Some("up"), "l" | "right" => Some("right"), _ => None,
+                        };
+                        if let Some(direction) = direction {
+                            this.run("pane.resize", json!({"pane": pane, "direction": direction}), window, cx);
+                        }
+                    }
+                    cx.notify();
+                    true
+                });
+                if consume { cx.stop_propagation(); return; }
+            }
+            if let Some(view) = owner.upgrade() {
+                let terminal = view.read(cx).terms.values().find(|t| t.focus.is_focused(window)).map(|t| t.view.clone());
+                if let Some(terminal) = terminal && terminal.read(cx).copy_mode_active() {
+                    let searching = terminal.read(cx).copy_search_active();
+                    let prefix = window.possible_bindings_for_input(std::slice::from_ref(&event.keystroke)).iter().any(|binding| {
+                        gpui_shell::action::script_id(binding.action().as_any()) == Some("legacy.prefix_cancel")
+                    });
+                    if searching || (!window.has_pending_keystrokes() && !prefix) {
+                        terminal.update(cx, |term, cx| term.route_copy_key(&event.keystroke, cx));
+                        cx.stop_propagation();
+                        return;
+                    }
+                }
+            }
+            let Some(pending) = window.pending_input_keystrokes() else { return };
+            let possible = window.possible_bindings_for_input(pending);
+            let legacy_prefix = possible.iter().any(|binding| {
+                gpui_shell::action::script_id(binding.action().as_any()) == Some("legacy.prefix_cancel")
+            });
+            let mut candidate = pending.to_vec();
+            candidate.push(event.keystroke.clone());
+            let repeat = possible.iter().any(|binding| binding.match_keystrokes(&candidate).is_some()
+                && gpui_shell::action::script_id(binding.action().as_any()) == Some("legacy.prefix_repeat"));
+            if legacy_prefix && repeat {
+                let prefix = event.keystroke.clone();
+                let terminal = owner.upgrade().and_then(|view| view.read(cx).terms.values()
+                    .find(|t| t.focus.is_focused(window)).map(|t| t.view.clone()));
+                window.clear_pending_keystrokes(cx);
+                if let Some(terminal) = terminal {
+                    terminal.update(cx, |term, _| { term.send_legacy_prefix(&prefix); });
+                }
+                cx.stop_propagation();
+                return;
+            }
+            if crate::keys::consume_unknown_legacy(window, &event.keystroke, cx) {
+                cx.stop_propagation();
+            }
+        }));
+        w._pending_activation = Some(cx.observe_window_activation(window, |this, window, cx| {
+            if !window.is_window_active() {
+                this.legacy_resize_pane = None;
+                if window.has_pending_keystrokes() {
+                    window.clear_pending_keystrokes(cx);
+                }
+            }
+            cx.notify();
+        }));
         w._place = Some(cx.observe_window_bounds(window, |this, window, cx| {
             if let Some(t) = crate::place::changed(window, cx) {
                 this.place_write = Some(t);
@@ -1359,7 +1462,12 @@ impl AppWindow {
     }
 
     /// Makes `addr` the shown agent; a pane showing it also becomes the focused pane.
+    fn legacy_machine(&self) -> Option<&str> {
+        self.selected_machine.as_deref().or_else(|| self.model.active_space().and_then(|space| space.machine.as_deref()))
+    }
+
     fn focus_agent(&mut self, addr: &str) {
+        self.selected_machine = None;
         if let Some(p) = self.model.pane_of(addr) {
             self.model.focus_pane(&p);
         }
@@ -1382,6 +1490,11 @@ impl AppWindow {
 
     /// Creates what's visible, drops what isn't, publishes state, saves, focuses.
     fn sync(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(machine) = &self.selected_machine
+            && self.model.active_space().is_some_and(|space| space.machine.as_deref().unwrap_or("") != machine.as_str())
+        {
+            self.model.active = None;
+        }
         self.model.order_spaces();
         let (model, live) = (&self.model, &self.live);
         self.swapped.retain(|p, a| model.address_of(p).is_some() && live.contains_key(a));
@@ -1410,6 +1523,9 @@ impl AppWindow {
             let (block, addr) = (id.clone(), address.clone());
             let sub = cx.subscribe_in(&view, window, move |this, _, ev: &TerminalEvent, window, cx| match ev {
                 TerminalEvent::Peek(address) => this.peek_terminal(address, window, cx),
+                TerminalEvent::Copied => {
+                    this.open_overlay(mods::new_overlay_id(), json!({"kind":"toast", "notification":{"title":"Copied", "body":"", "level":"info", "timeout":1500}}), window, cx);
+                }
                 TerminalEvent::TitleChanged => this.publish(cx),
                 TerminalEvent::Ended => this.terminal_ended(&block, window, cx),
                 TerminalEvent::ContextMenu(at) => {
@@ -1719,7 +1835,7 @@ impl AppWindow {
                     }
                     let Some(addr) = p.terminal() else { continue };
                     let a = m.agents.get(addr);
-                    let title = self.terms.get(&p.id).map(|t| t.view.read(cx).title.clone()).or_else(|| {
+                    let title = p.title.clone().or_else(|| self.terms.get(&p.id).map(|t| t.view.read(cx).title.clone())).or_else(|| {
                         self.live.get(addr).and_then(|r| r.get("title")).and_then(Value::as_str).map(str::to_owned)
                     });
                     panes.push(json!({
@@ -2781,6 +2897,28 @@ impl AppWindow {
             self.ask_name(name, args, window, cx);
             return json!({ "asked": "name" });
         }
+        if person && self.layout_name == "rowan-terminal" {
+            let prompt = match name {
+                "tab.new" => crate::keys::legacy_ui(self.legacy_machine(), "prompt_new_tab_name", true),
+                "space.new" => crate::keys::legacy_ui(self.legacy_machine(), "prompt_new_workspace_name", false),
+                _ => false,
+            };
+            if prompt && args.get("name").is_none_or(Value::is_null) {
+                if !args.is_object() { args = json!({}); }
+                if name == "tab.new" && args.get("space").is_none() && let Some(space) = self.model.active.clone() {
+                    args["space"] = json!(space);
+                }
+                self.ask_name(name, args, window, cx);
+                return json!({"asked":"name"});
+            }
+            if matches!(name, "space.close" | "tab.close")
+                && args.get("confirmed").is_none_or(Value::is_null)
+                && !crate::keys::legacy_ui(self.legacy_machine(), "confirm_close", true)
+            {
+                if !args.is_object() { args = json!({}); }
+                args["confirmed"] = json!(true);
+            }
+        }
         if let Some(arg) = crate::commands::missing(command, &args) {
             return json!({ "error": format!("{name} needs {arg}") });
         }
@@ -2788,11 +2926,15 @@ impl AppWindow {
             crate::telemetry::command(command.name);
         }
         if name == "space.new" {
-            let machine = new_space_machine(&args, person, &self.model);
+            let machine = if person && args.get("machine").is_none_or(Value::is_null) {
+                self.selected_machine.clone().filter(|m| !m.is_empty()).or_else(|| {
+                    if self.selected_machine.is_some() { None } else { new_space_machine(&args, person, &self.model) }
+                })
+            } else { new_space_machine(&args, person, &self.model) };
             if !args.is_object() { args = json!({}); }
             args["machine"] = json!(machine);
         }
-        if matches!(name, "space.new" | "space.close" | "space.rename" | "space.move" | "tab.new" | "tab.close" | "tab.rename" | "tab.move" | "pane.split" | "pane.close" | "pane.swap" | "terminal.keep" | "terminal.park") {
+        if matches!(name, "space.new" | "space.close" | "space.rename" | "space.move" | "tab.new" | "tab.close" | "tab.rename" | "tab.move" | "pane.split" | "pane.close" | "pane.swap" | "pane.rename" | "pane.resize" | "terminal.keep" | "terminal.park") {
             let node = ["id", "space", "pane"].into_iter().find_map(|k| Self::arg(&args, k));
             let target = node.and_then(|id| self.model.space(id).or_else(|| self.model.space_of(id))).or_else(|| self.model.active_space());
             let machine = if name == "space.new" { Self::arg(&args, "machine") }
@@ -2817,11 +2959,19 @@ impl AppWindow {
             args = json!({});
         }
         let (title, hint, current) = match name {
+            "tab.new" => ("new tab", "empty: its number", None),
+            "space.new" => ("new space", "empty: named after its folder", None),
             "space.rename" => {
                 let id = Self::owned(&args, "id").or_else(|| self.model.active.clone());
                 let current = id.as_deref().and_then(|i| self.model.space(i)).map(|p| p.name.clone());
                 args["id"] = json!(id);
                 ("rename space", "empty: named after its folder", current)
+            }
+            "pane.rename" => {
+                let id = Self::owned(&args, "pane").or_else(|| self.model.focused_pane());
+                let current = id.as_deref().and_then(|i| self.model.tab_of(i)?.root.find(i)?.title.clone());
+                args["pane"] = json!(id);
+                ("rename pane", "empty: its program title", current)
             }
             _ => {
                 let id = Self::owned(&args, "id").or_else(|| self.model.active_tab().map(|c| c.id.clone()));
@@ -2843,10 +2993,47 @@ impl AppWindow {
     fn dispatch(&mut self, name: &str, a: &Value, person: bool, window: &mut Window, cx: &mut Context<Self>) {
         let active_ctx = self.model.active_tab().map(|c| c.id.clone());
         match name {
+            "legacy.plugin" => self.run_legacy_plugin(a, window, cx),
+            "legacy.prefix_cancel" => { window.clear_pending_keystrokes(cx); }
+            "legacy.prefix_repeat" => { return self.fail("repeat requires a pending prefix"); }
+            "legacy.key" => {
+                if self.layout_name != "rowan-terminal" { return self.fail("legacy layout is not active"); }
+                let key = Self::arg(a, "keys").unwrap_or_default();
+                let Some((_, _, action)) = crate::keys::listing_for(self.legacy_machine(), true).into_iter()
+                    .find(|(section, keys, _)| section == "layout:rowan-terminal" && keys == key)
+                else { return self.fail("no such legacy key"); };
+                let space = Self::arg(a, "space");
+                if let Some(id) = space {
+                    let Some(target) = self.model.space(id) else { return self.fail("no such space"); };
+                    if target.machine != self.model.active_space().and_then(|s| s.machine.clone()) {
+                        return self.fail("space belongs to another machine");
+                    }
+                }
+                if let Some(id) = space && matches!(action.as_str(), "space.rename" | "space.close") {
+                    self.reply = Some(self.run_as(&action, json!({"id":id}), person, window, cx));
+                } else if let Some(id) = space && matches!(action.as_str(), "rowan-spaces.worktree-new" | "rowan-spaces.worktree-open" | "rowan-spaces.worktree-remove") {
+                    let encoded: String = id.bytes().map(|b| if b.is_ascii_alphanumeric() || b"-_.!~*'()".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") }).collect();
+                    if !mods::send_command("rowan-spaces", &format!("{}:{encoded}", action.trim_start_matches("rowan-spaces."))) {
+                        return self.fail("rowan-spaces is not loaded");
+                    }
+                } else {
+                    self.reply = Some(self.run_as(&action, Value::Null, person, window, cx));
+                }
+            }
             // ---- spaces
+            "machine.select" => {
+                let Some(machine) = Self::arg(a, "machine") else { return self.fail("machine.select needs machine (empty for local)"); };
+                if let Err(error) = self.require_document((!machine.is_empty()).then_some(machine)) { return self.fail(error); }
+                self.selected_machine = Some(machine.to_owned());
+                self.model.active = self.model.spaces.iter().find(|space| space.machine.as_deref().unwrap_or("") == machine).map(|space| space.id.clone());
+                self.focused_pane = None;
+                self.focused_block = None;
+                self.agent = None;
+            }
             "space.new" => {
                 let name = Self::arg(a, "name").unwrap_or_default();
                 let r = self.new_space(name, Self::owned(a, "folder"), Self::arg(a, "tab"), Self::argv(a), Self::arg(a, "task"), Self::owned(a, "machine").filter(|m| !m.is_empty()), window);
+                if r.is_ok() { self.selected_machine = None; }
                 self.answer(r);
             }
             "space.close" => {
@@ -2875,6 +3062,7 @@ impl AppWindow {
                 if !self.model.move_space(id, i as usize) { return self.fail(format!("no space {id:?}")); }
             }
             "space.select" => {
+                self.selected_machine = None;
                 let id = Self::owned(a, "id").or_else(|| {
                     let i = a.get("index").and_then(Value::as_u64)? as usize;
                     self.model.spaces.get(i.checked_sub(1)?).map(|p| p.id.clone())
@@ -2885,6 +3073,7 @@ impl AppWindow {
                 }
             }
             "space.next" | "space.prev" => {
+                self.selected_machine = None;
                 let n = self.model.spaces.len();
                 if let Some(i) = self.model.active_index().filter(|_| n > 0) {
                     let j = if name == "space.next" { (i + 1) % n } else { (i + n - 1) % n };
@@ -2898,7 +3087,7 @@ impl AppWindow {
                     Some(m) => self.new_mod_tab(Self::owned(a, "space"), name, m, a.get("props").cloned().unwrap_or(Value::Null)),
                     // A person's new tab with no space open starts one, as space.new does.
                     None if person && a.get("space").is_none() && self.model.active_space().is_none() => {
-                        self.new_space("", Self::owned(a, "folder"), Some(name), Self::argv(a), Self::arg(a, "task"), None, window)
+                        self.new_space("", Self::owned(a, "folder"), Some(name), Self::argv(a), Self::arg(a, "task"), self.selected_machine.clone().filter(|m| !m.is_empty()), window)
                     }
                     None => self.new_tab(Self::owned(a, "space"), name, Self::owned(a, "folder"), Self::argv(a), Self::arg(a, "task"), window),
                 };
@@ -2960,6 +3149,96 @@ impl AppWindow {
                 }
             }
             // ---- panes
+            "pane.resize_mode" => {
+                let Some(pane) = self.model.focused_pane() else { return self.fail("no pane"); };
+                self.legacy_resize_pane = Some(pane);
+                cx.notify();
+            }
+            "pane.rename" => {
+                let Some(pane) = Self::owned(a, "pane").or_else(|| self.model.focused_pane()) else { return self.fail("no pane") };
+                let Some(value) = Self::arg(a, "name") else { return self.fail("pane.rename needs name") };
+                let Some(tab_id) = self.model.tab_of(&pane).map(|tab| tab.id.clone()) else { return self.fail("no such pane") };
+                let node = self.model.tab_mut(&tab_id).unwrap().root.find_mut(&pane).unwrap();
+                node.title = (!value.trim().is_empty()).then(|| value.trim().to_owned());
+            }
+            "pane.resize" => {
+                let Some(pane) = Self::owned(a, "pane").or_else(|| self.model.focused_pane()) else { return self.fail("no pane") };
+                let Some(tab_id) = self.model.tab_of(&pane).map(|tab| tab.id.clone()) else { return self.fail("no such pane") };
+                let direction = Self::arg(a, "direction").unwrap_or_default();
+                if !matches!(direction, "left" | "right" | "up" | "down") { return self.fail("invalid resize direction"); }
+                if !self.model.tab_mut(&tab_id).unwrap().root.resize_pane(&pane, direction) { return self.fail("no resizable boundary"); }
+            }
+            "pane.cycle" | "pane.last" => {
+                let Some(tab) = self.model.active_tab() else { return self.fail("no active tab") };
+                let pane = if name == "pane.last" { tab.last_pane() } else {
+                    match Self::arg(a, "direction") {
+                        Some("next") => tab.cycle_pane(true),
+                        Some("prev") => tab.cycle_pane(false),
+                        _ => return self.fail("pane.cycle direction is next or prev"),
+                    }
+                };
+                if let Some(pane) = pane { return self.dispatch("pane.focus", &json!({"pane":pane}), person, window, cx); }
+            }
+            "terminal.copy_mode" => {
+                if let Some(t) = self.focused_terminal(window) {
+                    t.view.update(cx, |v, cx| v.enter_copy_mode(cx));
+                } else { return self.fail("no focused terminal"); }
+            }
+            "terminal.clear" => {
+                let Some(t) = self.focused_terminal(window) else { return self.fail("no focused terminal"); };
+                self.answer(self.core.call("terminal.clear", json!({"terminal":t.address})).map_err(|e| e.to_string()));
+            }
+            "terminal.edit_scrollback" => {
+                let Some(pane) = self.model.focused_pane() else { return self.fail("no pane"); };
+                let Some(terminal) = self.focused_terminal(window) else { return self.fail("no focused terminal"); };
+                let address = terminal.address.clone();
+                if self.model.address_of(&pane).as_deref() != Some(address.as_str()) { return self.fail("focus a model terminal pane"); }
+                let text = terminal.view.read(cx).scrollback_text();
+                let machine = self.model.space_of(&pane).and_then(|s| s.machine.clone());
+                if let Err(error) = self.require_document(machine.as_deref()) { return self.fail(error); }
+                cx.spawn_in(window, async move |this, cx| {
+                    let source = address.clone();
+                    let result = cx.background_executor().spawn(async move {
+                        use std::io::Write;
+                        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(|e| e.to_string())?.as_nanos();
+                        let path = std::env::temp_dir().join(format!("herdr-scrollback-{}-{stamp}.txt", std::process::id()));
+                        let mut options = std::fs::OpenOptions::new();
+                        options.write(true).create_new(true);
+                        #[cfg(unix)] { use std::os::unix::fs::OpenOptionsExt; options.mode(0o600); }
+                        let mut file = options.open(&path).map_err(|e| e.to_string())?;
+                        let result = (|| {
+                            file.write_all(text.as_bytes()).map_err(|e| e.to_string())?;
+                            drop(file);
+                            let output = crate::spawn::command(crate::core_bin::path()).args(["put", "--json", &source]).arg(&path).output().map_err(|e| e.to_string())?;
+                            if !output.status.success() { return Err(String::from_utf8_lossy(&output.stderr).into_owned()); }
+                            let value: Value = serde_json::from_slice(&output.stdout).map_err(|e| e.to_string())?;
+                            value.get("path").and_then(Value::as_str).map(str::to_owned).ok_or_else(|| "hc put returned no path".to_owned())
+                        })();
+                        if result.as_ref().ok().is_none_or(|remote| std::path::Path::new(remote) != path) { let _ = std::fs::remove_file(path); }
+                        result
+                    }).await;
+                    let _ = this.update_in(cx, |this, window, cx| {
+                        match result {
+                            Ok(path) if this.model.address_of(&pane).as_deref() == Some(address.as_str())
+                                && this.model.focused_pane().as_deref() == Some(pane.as_str())
+                                && this.model.space_of(&pane).and_then(|s| s.machine.clone()) == machine
+                                && this.live.contains_key(&address) => {
+                                let argv = vec!["sh".to_owned(), "-c".to_owned(), "trap 'rm -f -- \"$1\"' EXIT; ${VISUAL:-${EDITOR:-vi}} \"$1\"".to_owned(), "herdr-scrollback".to_owned(), path.clone()];
+                                let cwd = this.cwds.get(&address).cloned();
+                                if let Err(error) = this.open_transient_terminal(argv, cwd, machine.clone(), None, window, cx) {
+                                    Self::discard_scrollback_file(path, machine.clone(), cx);
+                                    this.open_overlay(mods::new_overlay_id(), json!({"kind":"toast","notification":{"title":"Scrollback editor failed","body":error,"level":"error"}}), window, cx);
+                                }
+                            }
+                            Ok(path) => {
+                                Self::discard_scrollback_file(path, machine.clone(), cx);
+                                this.open_overlay(mods::new_overlay_id(), json!({"kind":"toast","notification":{"title":"Scrollback editor failed","body":"The source pane changed before the editor opened.","level":"error"}}), window, cx);
+                            }
+                            Err(error) => this.open_overlay(mods::new_overlay_id(), json!({"kind":"toast","notification":{"title":"Scrollback editor failed","body":error,"level":"error"}}), window, cx),
+                        }
+                    });
+                }).detach();
+            }
             "pane.split" => {
                 let axis = match Self::arg(a, "direction") {
                     Some("right") => Axis::Row,
@@ -2997,6 +3276,7 @@ impl AppWindow {
                 }
             }
             "pane.focus" => {
+                self.selected_machine = None;
                 if Self::arg(a, "pane").is_none()
                     && let Some(terminal) = Self::arg(a, "terminal")
                     && let Some(block) = self.chrome.visible_blocks().into_iter().find(|n| n.terminal() == Some(terminal))
@@ -3145,6 +3425,19 @@ impl AppWindow {
                 }
             }
             // ---- agents
+            "agent.select" => {
+                let Some(index) = a.get("index").and_then(Value::as_u64).and_then(|n| n.checked_sub(1)) else { return self.fail("agent.select index starts at 1"); };
+                let Some(addr) = self.agent_order().get(index as usize).cloned() else { return self.fail("no such agent"); };
+                self.focus_agent(&addr);
+            }
+            "notification.open_target" => {
+                let action = self.overlays.iter().rev().find(|o| o.kind == OverlayKind::Toast
+                    && o.expires.is_none_or(|expires| expires > Instant::now()) && o.notification_action.is_some())
+                    .and_then(|o| o.notification_action.clone());
+                let Some(action) = action else { return self.fail("no visible notification target"); };
+                let Some(command) = action.get("name").and_then(Value::as_str) else { return self.fail("invalid notification target"); };
+                self.reply = Some(self.run_as(command, action.get("args").cloned().unwrap_or(Value::Null), person, window, cx));
+            }
             "agent.focus" => {
                 let t = Self::arg(a, "terminal").unwrap_or_default().to_owned();
                 if !self.live.contains_key(&t) {
@@ -3340,7 +3633,16 @@ impl AppWindow {
                 }
                 crate::update::update_core();
             }
+            "app.reload" => {
+                self.watched.keys = None;
+                self.watched.settings = None;
+                self.watched.programs = None;
+                self.reload_config(window, cx);
+            }
             "app.help" => {
+                if self.layout_name == "rowan-terminal" {
+                    return self.dispatch("mod.open", &json!({"name":"rowan-help"}), person, window, cx);
+                }
                 if self.overlays.iter().any(|o| o.id == "help") {
                     self.close_overlay("help", window, cx);
                 } else {
@@ -3575,6 +3877,8 @@ impl AppWindow {
             at,
             size,
             expires: (kind == OverlayKind::Toast).then(|| Instant::now() + Duration::from_millis(timeout as u64)),
+            notification_action: (kind == OverlayKind::Toast).then(|| spec.pointer("/notification/action").cloned()).flatten(),
+            transient_terminal: None,
             focus,
             layout,
             top,
@@ -3603,6 +3907,42 @@ impl AppWindow {
             self.publish_shown_copies();
         }
         cx.notify();
+    }
+
+    fn discard_scrollback_file(path: String, machine: Option<String>, cx: &mut Context<Self>) {
+        cx.background_executor().spawn(async move {
+            if let Some(machine) = machine {
+                let _ = mods::run_remote(&machine, "rm", &["-f".into(), "--".into(), path], None);
+            } else {
+                let _ = std::fs::remove_file(path);
+            }
+        }).detach();
+    }
+
+    /// Run an owned, non-persistent terminal in a modal overlay. Closing the
+    /// overlay ends it; an exited terminal closes its overlay automatically.
+    fn open_transient_terminal(&mut self, argv: Vec<String>, cwd: Option<String>, machine: Option<String>, cells: Option<(u32, u32)>, window: &mut Window, cx: &mut Context<Self>) -> Result<String, String> {
+        self.require_document(machine.as_deref())?;
+        let result = self.core.call("terminal.run", json!({
+            "argv": argv, "cwd": cwd, "on": machine, "keep": false,
+            "env": {"TERM":"xterm-256color","COLORTERM":"truecolor","TERM_PROGRAM":"herdr"},
+            "labels": {}
+        })).map_err(|e| format!("cannot start transient terminal: {e:#}"))?;
+        let address = result.get("address").and_then(Value::as_str).ok_or("terminal.run returned no address")?.to_owned();
+        let cell = crate::terminal::cell_size(window);
+        let (width, height) = cells.map(|(cols, rows)| (
+            f32::from(cell.width) * cols as f32 / settings::zoom(),
+            f32::from(cell.height) * rows as f32 / settings::zoom(),
+        )).unwrap_or((1.0, 1.0));
+        let id = mods::new_overlay_id();
+        self.open_overlay(id.clone(), json!({
+            "kind":"dialog", "width":width, "height":height, "frame":"none",
+            "layout":{"type":"block","content":{"terminal":address}}
+        }), window, cx);
+        if let Some(overlay) = self.overlays.iter_mut().find(|overlay| overlay.id == id) {
+            overlay.transient_terminal = Some(address.clone());
+        }
+        Ok(address)
     }
 
     fn peek_terminal(&mut self, address: &str, window: &mut Window, cx: &mut Context<Self>) {
@@ -3638,6 +3978,9 @@ impl AppWindow {
     fn remove_overlay(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(i) = self.overlays.iter().position(|o| o.id == id) {
             let o = self.overlays.remove(i);
+            if let Some(address) = o.transient_terminal.as_ref() {
+                self.kill(std::slice::from_ref(address), cx);
+            }
             if self.win_drag.as_ref().is_some_and(|d| d.id == o.id) {
                 self.win_drag = None;
             }
@@ -3735,6 +4078,10 @@ impl AppWindow {
                 "tab": self.model.active_tab().map(|c| c.id.clone()),
                 "focused_pane": self.focused_pane,
                 "layout": self.layout_name,
+                "layout": self.layout_name,
+                "layout_name": self.layout_name,
+                "selected_machine": self.legacy_machine(),
+                "pending_keys": crate::keys::pending_keys(window),
                 "agent": self.shown_agent(),
                 "floats": self.float_status(),
                 "overlays": self.overlays.iter().map(|o| match &o.layout {
@@ -4570,8 +4917,8 @@ fn overlay_terminal_block<'a>(overlays: &'a [Overlay], id: Option<&str>) -> Opti
 
 fn needs_model_pane(name: &str, args: &Value) -> bool {
     match name {
-        "pane.split" | "pane.close" | "pane.zoom" | "terminal.show" => AppWindow::arg(args, "pane").is_none(),
-        "pane.go" | "pane.swap" => true,
+        "pane.split" | "pane.close" | "pane.zoom" | "pane.rename" | "pane.resize" | "terminal.show" => AppWindow::arg(args, "pane").is_none(),
+        "pane.go" | "pane.swap" | "pane.cycle" | "pane.last" => true,
         "terminal.open" | "terminal.keep" => matches!(AppWindow::arg(args, "place"), Some("right" | "down")),
         _ => false,
     }
@@ -4816,7 +5163,7 @@ impl Render for AppWindow {
             .id("herdr")
             .track_focus(&self.focus)
             // `layout:<name>` key sections apply while that layout shows.
-            .key_context(format!("Herdr layout = {}", self.layout_name).as_str())
+            .key_context(format!("Herdr {} layout = {} legacy_profile = {}", if self.layout_name == "rowan-terminal" { "HerdrLegacy" } else { "" }, self.layout_name, crate::keys::legacy_profile(self.legacy_machine())).as_str())
             .size_full()
             .relative()
             .bg(c("background"))

@@ -111,58 +111,54 @@ pub fn resolve(link: &str, cwd: Option<&Path>) -> Option<Target> {
     Path::new(bare).exists().then(|| Target::File(PathBuf::from(bare)))
 }
 
+/// A remote terminal's paths name files on that machine, not this one.
+/// URLs remain usable; local file URLs cannot safely identify a remote file.
+pub fn resolve_from_terminal(link: &str, cwd: Option<&Path>, address: &str) -> Option<Target> {
+    let target = resolve(link, cwd)?;
+    if address.contains('/') {
+        match &target {
+            Target::File(_) => return None,
+            Target::Url(url) if url.get(..5).is_some_and(|s| s.eq_ignore_ascii_case("file:")) => return None,
+            _ => {}
+        }
+    }
+    Some(target)
+}
 /// Hands the target to the system's default handler.
 pub fn open(target: &Target) {
     let arg = match target {
         Target::Url(u) => std::ffi::OsStr::new(u),
         Target::File(p) => p.as_os_str(),
     };
-    open_system(arg);
-}
-
-#[cfg(windows)]
-fn open_system(arg: &std::ffi::OsStr) {
-    use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::{
-        System::Com::{COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE, CoInitializeEx, CoUninitialize},
-        UI::{Shell::ShellExecuteW, WindowsAndMessaging::SW_SHOWNORMAL},
-    };
-
-    let mut wide: Vec<u16> = arg.encode_wide().collect();
-    if wide.contains(&0) {
-        tracing::warn!("cannot open a link containing a NUL");
-        return;
-    }
-    wide.push(0);
-    // ShellExecuteW can pump messages; never reenter GPUI while it handles a click.
-    std::thread::spawn(move || {
-        let initialized = unsafe { CoInitializeEx(std::ptr::null(), (COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE) as u32) };
-        // Explorer interprets '=' as its own arguments; the handler gets a literal target.
-        let result = unsafe {
-            ShellExecuteW(std::ptr::null_mut(), std::ptr::null(), wide.as_ptr(), std::ptr::null(), std::ptr::null(), SW_SHOWNORMAL)
-        } as isize;
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        #[link(name = "shell32")]
+        unsafe extern "system" {
+            fn ShellExecuteW(hwnd: *mut std::ffi::c_void, operation: *const u16, file: *const u16, parameters: *const u16, directory: *const u16, show: i32) -> isize;
+        }
+        let file: Vec<u16> = arg.encode_wide().chain(Some(0)).collect();
+        // ShellExecute invokes the registered handler, including non-browser URL
+        // schemes; explorer.exe is a file manager, not the association API.
+        let result = unsafe { ShellExecuteW(std::ptr::null_mut(), std::ptr::null(), file.as_ptr(), std::ptr::null(), std::ptr::null(), 1) };
         if result <= 32 {
-            tracing::warn!("cannot open link: ShellExecuteW returned {result}");
+            tracing::warn!("cannot open link with ShellExecuteW: {result}");
         }
-        if initialized >= 0 {
-            unsafe { CoUninitialize() };
+    }
+    #[cfg(not(windows))]
+    {
+        let opener = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
+        let spawned = std::process::Command::new(opener)
+            .arg(arg)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+        match spawned {
+            // Reaped off the UI thread so it never lingers as a zombie.
+            Ok(mut child) => drop(std::thread::spawn(move || child.wait())),
+            Err(e) => tracing::warn!("cannot run {opener}: {e}"),
         }
-    });
-}
-
-#[cfg(not(windows))]
-fn open_system(arg: &std::ffi::OsStr) {
-    let opener = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
-    let spawned = std::process::Command::new(opener)
-        .arg(arg)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn();
-    match spawned {
-        // Reaped off the UI thread so it never lingers as a zombie.
-        Ok(mut child) => drop(std::thread::spawn(move || child.wait())),
-        Err(e) => tracing::warn!("cannot run {opener}: {e}"),
     }
 }
 
@@ -360,6 +356,11 @@ mod tests {
         assert_eq!(resolve(dir.join("src/main.rs").to_str().unwrap(), None), Some(file));
         assert_eq!(resolve("src/gone.rs", Some(&dir)), None);
         assert_eq!(resolve("src/main.rs", None), None);
+        assert_eq!(resolve_from_terminal("src/main.rs", Some(&dir), "t1"), Some(Target::File(dir.join("src/main.rs"))));
+        assert_eq!(resolve_from_terminal("src/main.rs", Some(&dir), "other/t1"), None);
+        assert_eq!(resolve_from_terminal(dir.join("src/main.rs").to_str().unwrap(), None, "other/t1"), None);
+        assert_eq!(resolve_from_terminal("file:///tmp/example", None, "other/t1"), None);
+        assert_eq!(resolve_from_terminal("https://a.com/x?a=1&b=2", None, "other/t1"), Some(Target::Url("https://a.com/x?a=1&b=2".into())));
         assert_eq!(resolve("https://a.com/x", None), Some(Target::Url("https://a.com/x".into())));
         #[cfg(unix)]
         {

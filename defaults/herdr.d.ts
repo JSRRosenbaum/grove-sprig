@@ -255,7 +255,13 @@ export function window(): {
   maximized: boolean;
   fullscreen: boolean;
   active: boolean;
-};
+  /** Name of the layout currently shown in this window. */
+  layout_name: string;
+  /** Selected source machine, including an empty endpoint; null means this computer. */
+  selected_machine: string | null;
+  /** GPUI's currently pending chord, in canonical keystroke notation. */
+  pending_keys: string[];
+} | null;
 
 /** For a floating mod: where it sits now. `vertical` on the left/right edges, horizontal on
  *  top/bottom; while dragged, where it would land. `hovered` is true while the pointer is on it

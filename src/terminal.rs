@@ -17,6 +17,10 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
 
+#[path = "copy_mode.rs"]
+mod copy_mode;
+use copy_mode::CopyMode;
+
 fn pad() -> (f32, f32) {
     let p = crate::settings::get().terminal_padding;
     let zoom = crate::settings::zoom();
@@ -42,6 +46,8 @@ enum LinkTarget {
 
 pub enum TerminalEvent {
     Peek(String),
+    /// A mouse selection was copied.
+    Copied,
     TitleChanged,
     /// The program ended.
     Ended,
@@ -85,6 +91,8 @@ struct Grid {
     painted: Vec<(Rc<Vec<vt::Cell>>, Vec<RowOp>, Option<usize>)>,
     /// Font size, cell size, font, loaded fonts and ligature setting used to draw.
     painted_with: (u32, Size<Pixels>, String, u64, bool),
+    copy_cursor: Option<(u16, u32)>,
+    copy_matches: Vec<(u32, u16, u32, u16)>,
 }
 
 pub struct TerminalView {
@@ -123,6 +131,9 @@ pub struct TerminalView {
     search_input: Option<Entity<InputState>>,
     pending_search_nav: Option<bool>,
     search_task: Option<Task<()>>,
+    copy_mode: Option<CopyMode>,
+    copy_search_task: Option<Task<()>>,
+    copy_search_running: bool,
     _reader: Option<Task<()>>,
 }
 
@@ -252,6 +263,8 @@ impl TerminalView {
                 track: None,
                 painted: Vec::new(),
                 painted_with: (0, Size::default(), String::new(), 0, false),
+                copy_cursor: None,
+                copy_matches: Vec::new(),
             })),
             focus: cx.focus_handle(),
             was_focused: false,
@@ -264,6 +277,9 @@ impl TerminalView {
             search_input: None,
             pending_search_nav: None,
             search_task: None,
+            copy_mode: None,
+            copy_search_task: None,
+            copy_search_running: false,
             _reader: None,
         };
         view.connect(core, false, cx);
@@ -439,6 +455,15 @@ impl TerminalView {
                     Stream::Data(bytes) => {
                         g.vt.allow_clipboard_write(crate::settings::get().clipboard_write);
                         g.vt.write(&bytes);
+                        if let Some(mode) = self.copy_mode.as_mut() {
+                            let cursor = mode.output_changed(&mut g.vt);
+                            g.copy_cursor = cursor;
+                            g.copy_matches.clear();
+                            if g.copy_cursor.is_none() {
+                                self.copy_mode = None;
+                                g.vt.clear_selection();
+                            }
+                        }
                         let [clipboard, primary] = g.vt.take_clipboard();
                         if let Some(text) = clipboard {
                             cx.write_to_clipboard(ClipboardItem::new_string(text));
@@ -471,6 +496,7 @@ impl TerminalView {
             }
             g.vt.take_title()
         };
+        self.start_copy_search_task(cx);
         if let Some(title) = title {
             let title = if title.is_empty() { self.address.clone() } else { title };
             self.set_title(&title, cx);
@@ -621,8 +647,7 @@ impl TerminalView {
     }
 
     /// Copies the selection to the clipboard (and the primary selection on Linux).
-    /// Returns whether anything was copied. Does not clear the selection: mouse
-    /// copy-on-select uses this and keeps the highlight.
+    /// Returns whether anything was copied, without clearing the selection.
     pub fn copy(&mut self, cx: &mut Context<Self>) -> bool {
         let Some(text) = self.grid.borrow().vt.selection_text() else {
             return false;
@@ -756,7 +781,31 @@ impl TerminalView {
             // leak its keystrokes into the shell running in this terminal.
             return;
         }
+
+
+    /// Relay a repeated legacy prefix using the terminal's current keyboard mode.
+    pub fn send_legacy_prefix(&mut self, key: &Keystroke) -> bool {
+        let bytes = legacy_prefix_bytes(&mut self.grid.borrow_mut().vt, key);
+        if let Some(bytes) = bytes {
+            self.send(&bytes);
+            true
+        } else {
+            false
+        }
+    }
+
+    fn key_down(&mut self, ev: &KeyDownEvent, _w: &mut Window, cx: &mut Context<Self>) {
         let k = &ev.keystroke;
+        if self.copy_mode.is_some() {
+            self.copy_key(k, cx);
+            cx.stop_propagation();
+            return;
+        }
+        if (k.modifiers.control || k.modifiers.platform) && k.key == "c" && self.copy(cx) {
+            cx.emit(TerminalEvent::Copied);
+            cx.stop_propagation();
+            return;
+        }
         // Typing clears a selection, as in Herdr.
         if !k.key.starts_with("shift") && !k.key.starts_with("control") && !k.key.starts_with("alt") {
             self.grid.borrow_mut().vt.clear_selection();
@@ -851,29 +900,12 @@ impl TerminalView {
     /// The link at a window position, and where it shows.
     fn link_at(&self, pos: Point<Pixels>) -> Option<(LinkTarget, vt::Spans)> {
         let g = self.grid.borrow();
+        if pos.x < g.origin.x || pos.y < g.origin.y {
+            return None;
+        }
         let (x, y) = local(&g, pos);
         let (col, row) = (x / f32::from(g.cell.width), y / f32::from(g.cell.height));
-        let mut target = None;
-        let hit = g.vt.link_at(col as u16, row as u16, |text, at, joined| {
-            // In lines joined back together only a file that exists proves the join right.
-            if let Some(range) = links::find(text, at)
-                && let Some(link) = links::resolve(&text[range.clone()], self.cwd.as_deref())
-                && (!joined || matches!(link, links::Target::File(_)))
-            {
-                target = Some(LinkTarget::External(link));
-                return Some(range);
-            }
-            if joined {
-                return None;
-            }
-            let range = links::word(text, at)?;
-            let address = crate::mods::terminal_address(&text[range.clone()], &self.address)?;
-            target = Some(LinkTarget::Terminal(address));
-            Some(range)
-        })?;
-        // OSC 8 links bypass text detection.
-        let target = target.or_else(|| links::resolve(&hit.target, self.cwd.as_deref()).map(LinkTarget::External))?;
-        Some((target, hit.spans))
+        terminal_link_at(&g.vt, col as u16, row as u16, self.cwd.as_deref(), &self.address)
     }
 
     fn start_selection(&mut self, pos: Point<Pixels>, cx: &mut Context<Self>) {
@@ -912,7 +944,7 @@ impl TerminalView {
             drop(g);
             self.select(Select::Release, pos, cx);
         } else {
-            g.vt.clear_selection();
+            mouse_selection_text(&mut g.vt, false);
             cx.notify();
         }
     }
@@ -927,8 +959,13 @@ impl TerminalView {
         g.vt.select(step, col, row, x, y, cw, height);
         drop(g);
         if matches!(step, Select::Release) {
-            // Copy on select, as in Herdr.
-            self.copy(cx);
+            let text = mouse_selection_text(&mut self.grid.borrow_mut().vt, true);
+            if let Some(text) = text {
+                cx.write_to_clipboard(ClipboardItem::new_string(text.clone()));
+                #[cfg(target_os = "linux")]
+                cx.write_to_primary(ClipboardItem::new_string(text));
+                cx.emit(TerminalEvent::Copied);
+            }
         }
         cx.notify();
     }
@@ -978,6 +1015,40 @@ fn edge_arg(args: &Value) -> Result<ScrollTarget, String> {
 
 fn pages_to_lines(pages: f64, rows: u16) -> isize {
     (pages * f64::from(rows)).round() as isize
+}
+
+fn terminal_link_at(vt: &Vt, col: u16, row: u16, cwd: Option<&std::path::Path>, source: &str) -> Option<(LinkTarget, vt::Spans)> {
+    let mut target = None;
+    let hit = vt.link_at(col, row, |text, at, joined| {
+        // In lines joined back together only a file that exists proves the join right.
+        if let Some(range) = links::find(text, at)
+            && let Some(link) = links::resolve_from_terminal(&text[range.clone()], cwd, source)
+            && (!joined || matches!(link, links::Target::File(_)))
+        {
+            target = Some(LinkTarget::External(link));
+            return Some(range);
+        }
+        if joined {
+            return None;
+        }
+        let range = links::word(text, at)?;
+        let address = crate::mods::terminal_address(&text[range.clone()], source)?;
+        target = Some(LinkTarget::Terminal(address));
+        Some(range)
+    })?;
+    // OSC 8 links bypass text detection.
+    let target = target.or_else(|| links::resolve_from_terminal(&hit.target, cwd, source).map(LinkTarget::External))?;
+    Some((target, hit.spans))
+}
+
+/// A canceled gesture never copies. Successful mouse selections disappear after
+/// their text is captured; command copies retain their existing behavior.
+fn mouse_selection_text(vt: &mut Vt, completed: bool) -> Option<String> {
+    let text = completed.then(|| vt.selection_text()).flatten();
+    if !completed || text.is_some() {
+        vt.clear_selection();
+    }
+    text
 }
 
 fn selection_scroll_lines(y: f32, cell_height: f32, rows: u16) -> isize {
@@ -1213,6 +1284,11 @@ fn paste_image_fallback(vt: &mut vt::Vt, text: Option<&str>) -> Option<Vec<u8>> 
     }
     let keystroke = Keystroke::parse("ctrl-v").ok()?;
     key_bytes(vt, &KeyDownEvent { keystroke, is_held: false, prefer_character_input: false })
+}
+
+fn legacy_prefix_bytes(vt: &mut Vt, key: &Keystroke) -> Option<Vec<u8>> {
+    let event = KeyDownEvent { keystroke: key.clone(), is_held: false, prefer_character_input: false };
+    key_bytes(vt, &event)
 }
 
 /// What a key press sends to the program: the key described to libghostty,
@@ -1547,7 +1623,26 @@ fn paint_grid(bounds: Bounds<Pixels>, grid: &Rc<RefCell<Grid>>, focused: bool, w
     let origin = bounds.origin + point(px(pad_x), px(pad_y + (spare / 2.0).floor()));
     let origin = point(snap(origin.x), snap(origin.y));
     g.origin = origin;
-    let frame = g.vt.frame();
+    let mut frame = g.vt.frame();
+    if let Some((x, row)) = g.copy_cursor {
+        let top = g.vt.viewport_top();
+        frame.cursor = row.checked_sub(top).filter(|y| *y < u32::from(g.vt.rows)).map(|y| vt::Cursor {
+            x, y: y as u16, shape: CursorShape::Block, color: vt::theme().cursor,
+        });
+    }
+    if !g.copy_matches.is_empty() {
+        let top = g.vt.viewport_top();
+        let color = vt::theme().selection_bg;
+        for &(first_row, first_col, last_row, last_col) in &g.copy_matches {
+            for row in first_row.max(top)..=last_row.min(top.saturating_add(frame.rows.len().saturating_sub(1) as u32)) {
+                let Some(cells) = frame.rows.get_mut((row - top) as usize) else { continue };
+                let start = if row == first_row { first_col as usize } else { 0 };
+                let end = if row == last_row { last_col as usize + 1 } else { cells.len() };
+                let end = end.min(cells.len());
+                for cell in &mut Rc::make_mut(cells)[start.min(end)..end] { cell.bg = Some(color); }
+            }
+        }
+    }
     let placements = g.vt.placements();
     let mut images: Vec<(bool, Bounds<Pixels>, Arc<RenderImage>)> = Vec::new();
     let mut keep = std::collections::HashSet::new();
@@ -1781,10 +1876,14 @@ impl EntityInputHandler for TerminalView {
 
     fn replace_text_in_range(&mut self, _range: Option<std::ops::Range<usize>>, text: &str, window: &mut Window, cx: &mut Context<Self>) {
         self.grid.borrow_mut().marked = None;
-        // While the find field holds the keys, the input-method path must not
-        // be a way around that (see `key_down`); with the terminal focused,
-        // input methods type into the program as usual.
-        if !self.find_field_focused(window, cx) {
+        if let Some(mode) = self.copy_mode.as_mut() {
+            if let Some(prompt) = mode.prompt.as_mut() {
+                prompt.insert(text);
+            }
+        } else if !self.find_field_focused(window, cx) {
+            // While the find field holds the keys, the input-method path must not
+            // be a way around that (see `key_down`); with the terminal focused,
+            // input methods type into the program as usual.
             self.send(text.as_bytes());
         }
         cx.notify();
@@ -1847,6 +1946,7 @@ impl Render for TerminalView {
         let grid = self.grid.clone();
         let grid_paint = self.grid.clone();
         let selection_view = cx.entity().downgrade();
+        let resize_view = cx.entity().downgrade();
         let (input_focus, input_view) = (self.focus.clone(), cx.entity());
         let ended = self.ended.clone().or_else(|| self.lost.then(|| "reconnecting to core…".to_owned()));
         let search_input = self.search_open.then(|| self.search_input.clone()).flatten();
@@ -1862,6 +1962,11 @@ impl Render for TerminalView {
         } else {
             format!("{} matches", search_progress.total)
         };
+        let copy_status = self.copy_mode.as_ref().map(|mode| {
+            mode.prompt.as_ref().map_or_else(|| "[copy mode]".to_owned(), |prompt| {
+                format!("{}{}│{}", if prompt.forward { "/" } else { "?" }, &prompt.text[..prompt.cursor], &prompt.text[prompt.cursor..])
+            })
+        });
         let address = self.address.clone();
 
         div()
@@ -1913,6 +2018,7 @@ impl Render for TerminalView {
                         LinkTarget::External(target) => links::open(&target),
                         LinkTarget::Terminal(address) => cx.emit(TerminalEvent::Peek(address)),
                     }
+                    cx.stop_propagation();
                     return;
                 }
                 let mut g = this.grid.borrow_mut();
@@ -1967,9 +2073,19 @@ impl Render for TerminalView {
             }))
             .child(
                 canvas(
-                    move |bounds, window, _cx| {
+                    move |bounds, window, cx| {
                         let (cols, rows) = grid_size(bounds.size, cell);
+                        let geometry_changed = {
+                            let g = grid.borrow();
+                            (cols, rows) != (g.vt.cols, g.vt.rows)
+                        };
                         grid.borrow_mut().fit(cols, rows, cell, window.scale_factor());
+                        if geometry_changed || pending_attach {
+                            let _ = resize_view.update(cx, |this, cx| {
+                                if geometry_changed { this.invalidate_copy_mode(cx); }
+                                this.attach_pending(cx);
+                            });
+                        }
                     },
                     move |bounds, _, window, cx| {
                         paint_grid(bounds, &grid_paint, focused, window, cx);
@@ -2000,7 +2116,7 @@ impl Render for TerminalView {
                                             this.select(Select::Drag, ev.position, cx);
                                         } else {
                                             this.selection_scroll = None;
-                                            this.finish_selection(Some(ev.position), cx);
+                                            this.finish_selection(None, cx);
                                         }
                                     }
                                 });
@@ -2111,6 +2227,11 @@ impl Render for TerminalView {
                         ),
                 )
             })
+            .when_some(copy_status, |d, status| d.child(
+                div().absolute().bottom_2().left_2().px_2().py_1()
+                    .bg(crate::settings::color("raised"))
+                    .text_color(hsla(vt::theme().fg)).text_xs().child(status),
+            ))
             .when_some(ended, |d, why| {
                 d.child(
                     div()
@@ -2631,6 +2752,63 @@ mod tests {
         cx.run_until_parked();
         root.read_with(cx, |root, cx| assert!(root.0.read(cx).search_open));
         assert!(cx.debug_bounds("find-bar").is_some());
+    }
+
+    #[test]
+    fn terminal_link_hit_resolves_plain_and_osc_urls_from_remote_panes() {
+        use super::*;
+        let mut vt = Vt::new(80, 3);
+        vt.write(b"go https://example.com/a?x=1&y=2\r\n\x1b]8;;https://herdr.dev/docs\x1b\\the docs\x1b]8;;\x1b\\");
+        assert_eq!(
+            terminal_link_at(&vt, 5, 0, None, "remote/t1").map(|(target, _)| target),
+            Some(LinkTarget::External(links::Target::Url("https://example.com/a?x=1&y=2".into())))
+        );
+        assert_eq!(
+            terminal_link_at(&vt, 2, 1, None, "remote/t1").map(|(target, _)| target),
+            Some(LinkTarget::External(links::Target::Url("https://herdr.dev/docs".into())))
+        );
+        assert_eq!(terminal_link_at(&vt, 40, 0, None, "remote/t1"), None);
+    }
+
+    #[test]
+    fn mouse_release_copies_nonempty_selection_and_cancel_does_not() {
+        use super::*;
+        let mut vt = Vt::new(20, 3);
+        vt.write(b"hello world");
+        vt.select(Select::Press, 0, 0, 2.0, 5.0, 10.0, 60.0);
+        vt.select(Select::Release, 0, 0, 2.0, 5.0, 10.0, 60.0);
+        assert_eq!(mouse_selection_text(&mut vt, true), None);
+        let mut vt = Vt::new(20, 3);
+        vt.write(b"hello world");
+
+        vt.select(Select::Press, 0, 0, 2.0, 5.0, 10.0, 60.0);
+        vt.select(Select::Drag, 4, 0, 46.0, 5.0, 10.0, 60.0);
+        vt.select(Select::Release, 4, 0, 46.0, 5.0, 10.0, 60.0);
+        assert_eq!(mouse_selection_text(&mut vt, true).as_deref(), Some("hello"));
+        assert_eq!(vt.selection_text(), None);
+        let mut vt = Vt::new(20, 3);
+        vt.write(b"hello world");
+
+        vt.select(Select::Press, 0, 0, 2.0, 5.0, 10.0, 60.0);
+        vt.select(Select::Drag, 4, 0, 46.0, 5.0, 10.0, 60.0);
+        assert_eq!(vt.selection_text().as_deref(), Some("hello"));
+        assert_eq!(mouse_selection_text(&mut vt, false), None);
+        assert_eq!(vt.selection_text(), None);
+    }
+
+    #[test]
+    fn link_modifier_excludes_other_modifiers() {
+        use super::*;
+        let key = if cfg!(target_os = "macos") {
+            Modifiers { platform: true, ..Default::default() }
+        } else {
+            Modifiers { control: true, ..Default::default() }
+        };
+        assert!(link_mods(&key));
+        assert!(!link_mods(&Modifiers::default()));
+        assert!(!link_mods(&Modifiers { shift: true, ..key }));
+        assert!(!link_mods(&Modifiers { alt: true, ..key }));
+        assert!(!link_mods(&Modifiers { control: true, platform: true, ..Default::default() }));
     }
 
     #[test]
@@ -3207,6 +3385,15 @@ mod tests {
             prefer_character_input: false,
         }
     }
+    #[test]
+    fn repeated_legacy_prefix_uses_live_ghostty_keyboard_mode() {
+        let mut vt = Vt::new(20, 3);
+        let key = Keystroke::parse("ctrl-space").unwrap();
+        assert_eq!(super::legacy_prefix_bytes(&mut vt, &key).as_deref(), Some(b"\0".as_slice()));
+        vt.write(b"\x1b[>1u");
+        assert_eq!(super::legacy_prefix_bytes(&mut vt, &key).as_deref(), Some(b"\x1b[32;5u".as_slice()));
+    }
+
 
     #[test]
     fn ctrl_v_clipboard_text_follows_platform_paste_convention() {

@@ -1,0 +1,4 @@
+# Keep the MSVC C runtime inside the executable, like herdr-core, so a clean
+# Windows machine does not need a separately installed VC++ Redistributable.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

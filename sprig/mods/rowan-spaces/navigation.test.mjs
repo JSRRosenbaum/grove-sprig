@@ -45,7 +45,7 @@ async function setup() {
       },
       shared: key => values.get(key), setShared: (key, value) => values.set(key, value),
       theme: () => ({dim: 'dim', foreground: 'fg', selected: 'selected', hover: 'hover', chrome: 'chrome', unknown: 'unknown'}),
-      window: () => ({active: false, layout_name: world.layout}), keys: () => world.keys, openOverlay() {}, exec() {}, hc: args => world.hc(args), watchFolder() {}, nextCommand() {},
+      window: () => ({active: false, layout_name: world.layout}), keys: () => world.keys, openOverlay: spec => calls.push({name: 'openOverlay', spec}), exec() {}, hc: args => world.hc(args), watchFolder() {}, nextCommand() {},
     },
   };
   const source = await readFile(new URL('./main.js', import.meta.url), 'utf8');
@@ -70,6 +70,22 @@ async function setup() {
 const space = (id, machine = null) => ({id, machine, name: id, folder: `/${id}`, tabs: [{id: `${id}-tab`}], status: null, active: false});
 const repo = (machine, dir) => JSON.stringify([machine, dir]);
 const git = (machine, folder, common, linked = false) => ({key: JSON.stringify([machine, folder]), value: {repo: repo(machine, common), name: 'project', linked}});
+
+test('worktree commands retain focused context and reject stale or offline workspaces', async () => {
+  const {mod, world, calls} = await setup();
+  const s = space('a'); world.spaces = [s]; world.focus = {space: 'a', tab: 'a-tab', cwd: '/a/live'};
+  mod.inventory(world.spaces);
+  for (const action of ['new', 'open', 'remove']) mod.command(`worktree-${action}`);
+  assert.deepEqual(calls.map(c => c.spec.props.action), ['new', 'open', 'remove']);
+  assert.equal(calls[0].spec.props.folder, '/a/live');
+  assert.equal(calls[0].spec.props.space, 'a');
+  const other = space('other'); world.spaces.push(other);
+  mod.command('worktree-open:other');
+  assert.equal(calls[3].spec.props.space, 'other'); assert.equal(calls[3].spec.props.folder, '/other');
+  calls.length = 0; world.machines[0].layout = 'unavailable'; mod.command('worktree-remove');
+  world.machines[0].layout = 'ready'; world.focus.space = 'stale'; mod.command('worktree-new');
+  assert.equal(calls.length, 0);
+});
 
 test('tab reordering uses the live focused tab and adjacent index only', async () => {
   const {mod, world, calls} = await setup();
