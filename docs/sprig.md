@@ -172,6 +172,48 @@ secrets to publish official Herdr binaries. Existing CI recipes remain available
   Do not restore saved state over progressed live conversations. Windows/macOS
   changes are integrated as source but were not runtime-qualified in this Linux run.
 
+## Windows preview build — 2026-11-02
+
+The updated app and core now also have **unsigned Windows x86-64 MSVC preview
+builds**, compiled entirely on Ash from Sprig
+`9c5f65d4f477acebc16d735aa648d89f5a4ead39` and core
+`421c5ab41857f8b4a5f155c42f763008f455b33d`.
+
+- App executable SHA-256:
+  `6d68d36c26e0be4e2961539e847b63e5a6975a84038bdd62ff42a11640718961`.
+  Core executable:
+  `b8cfaa7486a3f754adeb132714800dc7efcbfa4515930209ac330ac5040ee9c9`.
+- Complete ZIP: `sprig-windows-x86_64-9c5f65d.zip`, SHA-256
+  `33b0f06f62681a5e75e9ce74c89f86e8fea0019f6ca5343a2a268ce2082d3e87`.
+  It contains both executables, pinned ConPTY, redistribution notices, public
+  customizations, isolated-preview instructions, `BUILD_INFO.json` and
+  per-file `SHA256SUMS`. SDK/FXC build tools and personal configuration/auth
+  are not distributed. The app requires Microsoft's x64 VC++ Redistributable.
+- Rowan copy: `/mnt/tank/AppCaches/rowan-dev/sprig-windows-20261102/`.
+  Ash build/provenance cache: `~/.cache/sprig-windows-20261102/`.
+  Lappy delivery: `C:\Users\joseph.rosenbaum\Downloads\sprig-windows-x86_64-9c5f65d.zip`,
+  with the matching extracted folder beside it. All 131 manifest-listed files
+  matched after Windows extraction.
+- Cross-build used Rust 1.95.0, cargo-xwin 0.23.1, Zig 0.16.0, LLVM 23 and
+  existing SDK/CRT caches. Build-only Ghostty overlays supply SDK includes to
+  Wuffs translation. Actual FXC under Wine generated the original GPUI release
+  shader entrypoints/profiles; an external resource object supplies the app icon.
+  Original tracked source checkouts were not edited to bypass those build steps.
+  Detailed commands, inputs and adaptation hashes are in the build manifest.
+- **Passed on Lappy:** app/core version and help, customization installer
+  (35 files in private roots), isolated core startup, actual ConPTY program
+  output, keyboard input (`abc`) and screen readback, clean private-core stop.
+  Existing installed app/core processes survived; no installed binary, real
+  profile, persistent PATH or shortcut was replaced.
+- **Not GUI-qualified:** native mod checking attempted over SSH failed with
+  `cannot open windows while headless` in SSH session 0. A Cua background
+  launch of the hidden-check helper also returned `background_unavailable`;
+  foreground control was not authorized or attempted. Interactive rendering,
+  graphics and physical keyboard behavior remain unverified. This is a separate preview, not
+  permission to replace the installed desktop app or a claim of full Windows
+  qualification. Use the included isolated-profile instructions from a desktop
+  PowerShell before deployment. macOS qualification is unchanged.
+
 ## Consolidation verification — 2026-11-02
 
 - Python installer suite: **9 passed**, including symlink write/delete escapes,
