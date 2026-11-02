@@ -31,6 +31,8 @@ own state when reopened. New slots initially copy the first window's saved
 JSON view state, not its configuration. Configuration edits are shared and
 hot-reload in all windows. Spaces, tabs and splits remain shared core structure.
 One window owns automatic alert sounds at a time.
+Agent pins and seen status are shared through the core with other windows and
+clients; workspace, pane focus, zoom and other view choices remain window-local.
 
 Zoom shortcuts save `window.zoom` in that slot's `shared.json`; they do not
 overwrite `settings.json`. The latter's `zoom` remains the initial default for
