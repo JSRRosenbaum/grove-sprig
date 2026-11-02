@@ -1,5 +1,14 @@
 # Herdr changelog
 
+## Sprig upstream integration — 2026-11-06
+
+- Rebased Sprig onto upstream herdr-app `cfcf836` (released 0.1.13 plus reviewed
+  master fixes), taking upstream code as the base and re-implementing Sprig
+  behavior on top of it.
+- Retained concurrent independent windows, native prefix/help, the compact herd
+  sidebar, durable repository/worktree grouping, prompt-free New worktree and
+  remote clipboard paste on the new upstream base.
+- Source pins are recorded in `sprig/upstreams.json`.
 ## [0.1.13] - 2026-11-04
 <!-- spotlight macos -->
 
