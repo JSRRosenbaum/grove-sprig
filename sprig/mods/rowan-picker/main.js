@@ -4,7 +4,7 @@
 
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
-import { agents, spaces, machines, terminals, run, theme, props, closeOverlay, shared, setShared } from "herdr";
+import { agents, spaces, machines, terminals, run, theme, settings, props, closeOverlay, shared, setShared } from "herdr";
 
 const MARK = { ansi6: "#22a99a", ansi3: "#e3814f", ansi4: "#5b8def", ansi5: "#8b7cf6", ansi2: "#3fae6a", ansi1: "#d9649a" };
 
@@ -41,6 +41,7 @@ export default class Picker extends View {
     this.input.focus();
     cx.timer.after(600, () => this.input.focus());
     this.at = null;
+    this.scroll = 0;
     this.showEarlier = true;
     this.handle = cx.focus_handle();
   }
@@ -113,6 +114,24 @@ export default class Picker extends View {
     if (this.at === null) this.at = Math.max(0, pickable.findIndex((r) => r.kind === "ctx" && r.w.active && r.ctx.active));
     this.at = Math.max(0, Math.min(this.at, pickable.length - 1));
     const sel = pickable[this.at];
+    // Keep the keyboard selection visible in one clipped, scrollable strip.
+    const H = { head: 31, earlier: 25, ctx: 32 };
+    const tops = [];
+    let total = 0;
+    rows.forEach(r => { tops.push(total); total += H[r.kind]; });
+    const height = Math.min(320, this.listHeight ?? 320);
+    const fixed = total > height;
+    const maxScroll = Math.max(0, total - height);
+    this.scroll = Math.max(0, Math.min(this.scroll, maxScroll));
+    const si = rows.indexOf(sel);
+    if (si >= 0) {
+      if (tops[si] < this.scroll) this.scroll = tops[si];
+      if (tops[si] + H[sel.kind] > this.scroll + height) this.scroll = tops[si] + H[sel.kind] - height;
+    }
+    const visible = i => !fixed || (tops[i] + H[rows[i].kind] > this.scroll && tops[i] < this.scroll + height);
+    const place = (el, i) => fixed
+      ? el.absolute().left(0).right(0).top(tops[i] - this.scroll).bottom(height - (tops[i] + H[rows[i].kind] - this.scroll))
+      : el;
 
     const row = (r) => {
       if (r.kind === "head") {
@@ -193,7 +212,19 @@ export default class Picker extends View {
           .child(svg("mods/workspace-chrome/search.svg").size(15).text_color(t.dim))
           .child(Input.new(this.input).flex_1().h_full().text_size(12.8).text_color(t.foreground)),
       )
-      .child(v_flex().h(Math.min(320, rows.reduce((h, r) => h + (r.kind === "head" ? 31 : r.kind === "earlier" ? 25 : 32), 0))).min_h(0).flex_shrink(1).overflow_y_scrollbar().children(rows.map(row)));
+      .child(v_flex().id("pk-list")
+        .on_size_change((size, cx) => {
+          this.listHeight = size.height / settings().zoom;
+          cx.notify();
+        })
+        .h(Math.min(320, total)).min_h(0).flex_shrink(1)
+        .when(fixed, el => el.overflow_hidden().on_scroll_wheel((e, cx) => {
+          this.scroll = Math.max(0, Math.min(this.scroll - e.delta.y, maxScroll));
+          while (this.at < pickable.length - 1 && tops[rows.indexOf(pickable[this.at])] < this.scroll) this.at++;
+          while (this.at > 0 && tops[rows.indexOf(pickable[this.at])] + H[pickable[this.at].kind] > this.scroll + height) this.at--;
+          cx.notify();
+        }))
+        .children(rows.map((r, i) => visible(i) ? place(row(r), i) : null).filter(Boolean)));
 
   }
 }

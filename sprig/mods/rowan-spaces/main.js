@@ -31,6 +31,9 @@ export default class Spaces extends View {
     this.git = {}; this.checked = {}; this.unsure = new Set(); this.pending = new Set();
     this.busy = {}; this.ready = {}; this.at = {}; this.watching = new Set();
     this.shown = new Set(spaces().map(s => s.id)); this.born = {}; this.machines = [];
+    this.handle = cx.focus_handle();
+    this.reconnecting = JSON.parse(localStorage.getItem("machines.reconnecting") ?? "{}");
+    for (const state of Object.values(this.reconnecting)) state.busy = false;
     this.folded = new Set(JSON.parse(localStorage.getItem("machines.folded") ?? "[]"));
     this.repoFolded = new Set(JSON.parse(localStorage.getItem("repos.folded") ?? "[]"));
     this.state = JSON.parse(localStorage.getItem("rowan.state") ?? "null") || {
@@ -41,7 +44,7 @@ export default class Spaces extends View {
     this.refreshMachines(cx);
     cx.timer.every(15000, cx => this.refreshMachines(cx));
     cx.timer.every(250, cx => this.checkNew(cx));
-    cx.spawn(async cx => { for (;;) { const command = await nextCommand(); this.command(command); cx.notify(); } });
+    cx.spawn(async cx => { for (;;) { const command = await nextCommand(); this.command(command, cx); cx.notify(); } });
   }
   save() { localStorage.setItem("rowan.state", JSON.stringify(this.state)); }
   herd() { return this.state.herds.find(h => h.id === this.state.active) || this.state.herds[0]; }
@@ -63,6 +66,20 @@ export default class Spaces extends View {
     for (const m of this.machines) {
       if (!m.id || !m.name) continue;
       const id = `id:${m.id}`, old = `name:${m.name}`;
+      const replaced = Object.entries(this.state.profiles).find(([key, name]) =>
+        key !== id && name === m.name && !this.machines.some(other => `id:${other.id}` === key))?.[0];
+      if (replaced) {
+        for (const herd of this.state.herds)
+          herd.members = [...new Set(herd.members.map(key => key === replaced ? id : key))];
+        for (const [key, value] of Object.entries(this.state.labels)) {
+          const parts = JSON.parse(key);
+          if (parts[0] !== replaced) continue;
+          this.state.labels[JSON.stringify([id, parts[1]])] ??= value;
+          delete this.state.labels[key];
+        }
+        delete this.state.profiles[replaced];
+        changed = true;
+      }
       const previous = this.state.profiles[id];
       if (previous && previous !== m.name) {
         const prefix = `${previous}/`, replacement = `${m.name}/`;
@@ -96,7 +113,7 @@ export default class Spaces extends View {
         if (parts[0] === old) { this.state.labels[JSON.stringify([id, parts[1]])] = value; delete this.state.labels[key]; changed = true; }
       }
     }
-    const keys = new Set(["@local", ...this.machines.map(m => this.machineKey(m.name)), ...machines().map(m => this.machineKey(m.name)), ...sp.map(s => this.machineKey(s.machine))]);
+    const keys = new Set(["@local", ...this.machines.map(m => this.machineKey(m.name)), ...machines().map(m => this.machineKey(m.name)), ...Object.keys(this.reconnecting).map(name => this.machineKey(name)), ...sp.map(s => this.machineKey(s.machine))]);
     for (const key of keys) if (!this.state.herds.some(h => h.members.includes(key))) { this.state.herds[0].members.push(key); changed = true; }
     for (const h of this.state.herds) if (!h.sectionOrder) {
       h.members.sort((a,b) => a === "@local" ? -1 : b === "@local" ? 1 : this.machineName(a).localeCompare(this.machineName(b)));
@@ -145,9 +162,20 @@ export default class Spaces extends View {
     if (remembered) this.select(remembered, target.last);
     else if (first) this.select(first, null);
   }
-  command(c) {
+  command(c, cx) {
     const h = this.herd(), all = this.state.herds, at = all.indexOf(h);
     if (c === "prefix-cancel") return;
+    if (c === "focus") {
+      this.cursor = focused()?.space;
+      this.handle.focus();
+      return;
+    }
+    if (c.startsWith("machine-reconnect:")) {
+      let name; try { name = decodeURIComponent(c.slice(18)); } catch { return; }
+      const machine = this.machines.find(m => m.name === name) ?? this.reconnecting[name]?.machine;
+      if (cx && machine && h.members.includes(this.machineKey(name))) this.reconnect(machine, cx);
+      return;
+    }
     if (c === "font-smaller") { this.setFontRatio(this.fontMetrics().ratio * 100 - 5); return; }
     if (c === "font-larger") { this.setFontRatio(this.fontMetrics().ratio * 100 + 5); return; }
     if (c === "font-reset") { this.setFontRatio(80); return; }
@@ -187,6 +215,24 @@ export default class Spaces extends View {
       const n = c.startsWith("workspace-select:") ? Number(c.slice(17)) - 1 : i < 0 ? (c === "workspace-next" ? 0 : rows.length - 1) : (i + (c === "workspace-next" ? 1 : -1) + rows.length) % rows.length;
       if (rows[n]) this.select(rows[n].w, null);
     }
+  }
+  keyboard(event, cx) {
+    if (event.modifiers.control || event.modifiers.platform || event.modifiers.alt) return;
+    const rows = this.ordered().filter(r => machines().some(m => m.name === r.w.machine && m.layout === "ready"));
+    if (event.key === "escape") {
+      this.cursor = null;
+      run("pane.go", {direction: "right"});
+    } else if ((event.key === "up" || event.key === "down") && rows.length) {
+      const index = rows.findIndex(r => r.w.id === (this.cursor ?? focused()?.space));
+      const next = index < 0 ? (event.key === "down" ? 0 : rows.length - 1)
+        : (index + (event.key === "down" ? 1 : -1) + rows.length) % rows.length;
+      this.cursor = rows[next].w.id;
+    } else if (event.key === "enter") {
+      const row = rows.find(r => r.w.id === this.cursor);
+      if (row) { this.cursor = null; this.select(row.w, null); }
+    } else return;
+    cx.stop_propagation();
+    cx.notify();
   }
   fontMetrics() {
     const saved = shared("rowan.sidebar.fontRatio");
@@ -274,6 +320,7 @@ export default class Spaces extends View {
   }
   startDrag(w, event) {
     this.machineDrag = null;
+    this.cursor = null;
     this.drag = machines().some(m => m.name === w.machine && m.layout === "ready")
       ? {id: w.id, start: event.position, moved: false, over: null} : null;
   }
@@ -294,7 +341,7 @@ export default class Spaces extends View {
     if (source && target && source.machine === target.machine &&
         this.herd().members.includes(this.machineKey(source.machine)) &&
         machines().some(m => m.name === source.machine && m.layout === "ready")) {
-      if (d.moved && d.over === target.id) run("space.move", {id: source.id, index: all.indexOf(target) + 1});
+      if (d.moved && d.over === target.id) this.queueMove(source, target);
       else if (!d.moved && source.id === target.id) this.select(source, null);
     }
     cx.notify();
@@ -303,10 +350,45 @@ export default class Spaces extends View {
     if (this.drag || this.machineDrag) { this.drag = null; this.machineDrag = null; cx.notify(); }
   }
   moveSpace(w, direction) {
-    const all = spaces(), same = all.filter(s => s.machine === w.machine);
+    const same = this.ordered().map(r => r.w).filter(s => s.machine === w.machine);
     const i = same.findIndex(s => s.id === w.id), other = same[i + direction];
     if (!other || machines().find(m => m.name === w.machine)?.layout !== "ready") return;
-    run("space.move", {id: w.id, index: all.findIndex(s => s.id === other.id) + 1});
+    this.queueMove(w, other);
+  }
+  queueMove(source, target) {
+    const ids = spaces().filter(s => s.machine === source.machine).map(s => s.id);
+    const from = ids.indexOf(source.id), to = ids.indexOf(target.id);
+    if (from < 0 || to < 0 || from === to) return;
+    ids.splice(to, 0, ids.splice(from, 1)[0]);
+    this.ordering = {machine: source.machine, ids, at: 0};
+    this.reconcileOrder(Date.now());
+  }
+  reconcileOrder(now) {
+    const pending = this.ordering;
+    if (!pending) return;
+    const all = spaces().slice(), current = all.filter(s => s.machine === pending.machine).map(s => s.id);
+    // A new/deleted workspace invalidates this explicit drag; never reorder it by guess.
+    if (current.length !== pending.ids.length || current.some(id => !pending.ids.includes(id)) ||
+        !this.herd().members.includes(this.machineKey(pending.machine))) {
+      this.ordering = null;
+      return;
+    }
+    const machine = machines().find(m => m.name === pending.machine);
+    // spaces() is optimistic; only the core's document can retire this intent.
+    if (machine?.space_order?.length === pending.ids.length &&
+        machine.space_order.every((id, i) => id === pending.ids[i])) { this.ordering = null; return; }
+    if (current.every((id, i) => id === pending.ids[i])) return;
+    if (now - pending.at < 1000 || machine?.layout !== "ready") return;
+    pending.at = now;
+    for (let i = 0; i < pending.ids.length; i++) {
+      const from = current.indexOf(pending.ids[i]);
+      if (from === i) continue;
+      const index = all.findIndex(s => s.id === current[i]);
+      run("space.move", {id: pending.ids[i], index: index + 1});
+      const moved = all.splice(all.findIndex(s => s.id === pending.ids[i]), 1)[0];
+      all.splice(index, 0, moved);
+      current.splice(i, 0, current.splice(from, 1)[0]);
+    }
   }
   moveMachine(key, target) {
     if (target.members.includes(key)) { this.menuMachine = null; return; }
@@ -319,6 +401,7 @@ export default class Spaces extends View {
     for (const s of sp) if (!this.shown.has(s.id)) this.born[s.id] ??= now;
     const due = this.due(now, sp, panes());
     if (due.size) this.refreshGit(due, cx);
+    this.reconcileOrder(now);
     if (sp.some((s) => !this.shown.has(s.id))) cx.notify();
   }
 
@@ -366,6 +449,43 @@ export default class Spaces extends View {
     cx.spawn(async cx => {
       try { const r = await hc(["machine", "ls", "--json"]); if (r.code === 0) this.machines = (JSON.parse(r.stdout).machines ?? []).filter((m) => !m.temporary); } catch {}
       cx.notify();
+    });
+  }
+  rebuilt(machine) {
+    return machine?.state === "unreachable" && /^a different core answers there \("[^"]+"\)$/.test(machine.why ?? "");
+  }
+  reconnect(machine, cx) {
+    const name = machine.name;
+    if ((!this.rebuilt(machine) && !this.reconnecting[name]) || this.reconnecting[name]?.busy) return;
+    const state = this.reconnecting[name] ??= {machine, removed: false};
+    state.busy = true;
+    state.error = null;
+    const save = () => localStorage.setItem("machines.reconnecting", JSON.stringify(this.reconnecting));
+    save(); cx.notify();
+    cx.spawn(async cx => {
+      try {
+        const ask = async args => {
+          const reply = await hc([...args, "--json"]);
+          if (reply.code !== 0) {
+            let message;
+            try { message = JSON.parse(reply.stdout || reply.stderr).error?.message; } catch {}
+            throw new Error(message || reply.stderr || reply.stdout || "Couldn't connect.");
+          }
+        };
+        if (!state.removed) { await ask(["machine", "rm", name]); state.removed = true; save(); }
+        const args = ["machine", "add"];
+        if (machine.via) args.push("--via", machine.target); else args.push(machine.target);
+        args.push("--name", name);
+        if (machine.session) args.push("--session", machine.session);
+        await ask(args);
+        this.folded.delete(name);
+        localStorage.setItem("machines.folded", JSON.stringify([...this.folded]));
+        delete this.reconnecting[name];
+      } catch (error) {
+        state.error = String(error.message ?? error);
+        state.busy = false;
+      }
+      save(); this.refreshMachines(cx); cx.notify();
     });
   }
 
@@ -445,7 +565,7 @@ export default class Spaces extends View {
   ordered() {
     const sp = spaces(), ps = panes();
     for (const w of sp) if (!this.shown.has(w.id) && (where(w, ps) in this.git || Date.now() - (this.born[w.id] ??= Date.now()) > 1500)) this.shown.add(w.id);
-    const list = sp.map(w => ({w, g: this.git[where(w, ps)] ?? null})).filter(r => this.shown.has(r.w.id));
+    const list = sp.map(w => ({w, g: this.git[where(w, ps)] ?? null}));
     // A repository is scoped by the complete machine profile and canonical common dir.
     const out = [], emitted = new Set();
     for (const r of list) {
@@ -456,18 +576,18 @@ export default class Spaces extends View {
     }
     // Machine headings determine the actual sidebar and keyboard order.
     const keys = this.herd().members;
-    return keys.flatMap(k => out.filter(r => this.machineKey(r.w.machine) === k));
+    return keys.flatMap(k => out.filter(r => this.machineKey(r.w.machine) === k && this.shown.has(r.w.id)));
   }
   row(r, t, compact) {
     const w = r.w, active = w.active;
     const ready = machines().some(m => m.name === w.machine && m.layout === "ready");
-    const branch = r.g?.branch || w.branch;
     const status = r.groupStatus ?? w.status;
     const drop = this.drag?.moved && this.drag.over === w.id;
     const all = drop ? spaces() : [];
     const below = drop && all.findIndex(s => s.id === this.drag.id) < all.findIndex(s => s.id === w.id);
     const line = h_flex().relative().id(`space-${w.id}`).h(this.metrics.rowHeight).flex_none().px(compact ? 3 : 14).gap(4).items_center()
       .when(active, e => e.bg(t.selected)).hover(e => e.bg(t.hover)).cursor_pointer()
+      .when(this.cursor === w.id, e => e.border_1().border_color(t.accent))
       .on_hover((on, cx) => {
         this.hoveredSpace = on ? w.id : this.hoveredSpace === w.id ? null : this.hoveredSpace;
         cx.notify();
@@ -488,11 +608,8 @@ export default class Spaces extends View {
         .child(ready ? glyph(status) : "·"));
     if (compact) return line.child(div().text_color(t.muted).child(this.label(w) || "…"));
     return line
-      .child(h_flex().flex_1().min_w(0).gap(0).items_center().overflow_hidden()
-        .child(div().min_w(0).truncate().text_color(t.foreground)
-          .when(active, e => e.font_semibold()).child(w.name))
-        .when(Boolean(branch && branch !== "main" && branch !== w.name), e => e.child(div().flex_none()
-          .text_color(t.muted).child(` - ${branch}`))))
+      .child(div().flex_1().min_w(0).truncate().text_color(t.foreground)
+        .when(active, e => e.font_semibold()).child(w.name))
       .when(this.hoveredSpace === w.id, e => e
         .child(div().id(`space-up-${w.id}`).text_color(t.muted).cursor_pointer()
           .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
@@ -508,6 +625,9 @@ export default class Spaces extends View {
     return keys.flatMap((key, index) => {
       const machine = this.machineName(key);
       const layout = machines().find(m => m.name === machine)?.layout;
+      const repair = this.reconnecting[machine];
+      const profile = this.machines.find(m => m.name === machine) ?? repair?.machine;
+      const rebuilt = this.rebuilt(profile) || Boolean(repair);
       const folded = this.folded.has(machine), mine = rows.filter(r => this.machineKey(r.w.machine) === key);
       const drop = this.machineDrag?.moved && this.machineDrag.over === key;
       const below = drop && keys.indexOf(this.machineDrag.key) < index;
@@ -528,7 +648,13 @@ export default class Spaces extends View {
           .when(folded, e => e.child(div().text_color(t.muted).child("▸")))
           .child(div().text_color(t.idle).child("├"))))
         .child(div().flex_1().h(1).bg(t.idle))
-        .when(layout !== "ready", e => e.child(div().flex_none().text_color(t.muted)
+        .when(rebuilt && !compact, e => e.child(div().id(`machine-connect-${machine}`).flex_none()
+          .text_color(repair?.error ? t.blocked : t.muted).cursor_pointer()
+          .tooltip(repair?.error || "This machine was rebuilt. Connect to its new core identity.")
+          .on_mouse_down("left", (_e,cx) => cx.stop_propagation())
+          .on_click((_e,cx) => { cx.stop_propagation(); this.reconnect(profile, cx); })
+          .child(repair?.busy ? "Connecting…" : "Connect")))
+        .when(layout !== "ready" && !rebuilt, e => e.child(div().flex_none().text_color(t.muted)
           .child(layout === "loading" ? "…" : "!")));
       const menu = this.menuMachine === key ? [
         ...[[-1, "Move section up"], [1, "Move section down"]].filter(([direction]) => keys[index + direction]).map(([direction, label]) =>
@@ -540,9 +666,9 @@ export default class Spaces extends View {
           .on_click((_e,cx) => { this.moveMachine(key, target); cx.notify(); })
           .child(`Move to herd ${target.id}${target.id === h.id ? " ✓" : ""}`)),
         ...(layout === "ready" ? [div().h(this.metrics.rowHeight + 4).px(14).text_color(t.foreground)
-          .cursor_pointer().on_click(() => run("space.new", {machine})).child("New workspace")] : []),
+          .cursor_pointer().on_click(() => run("space.new", {machine: machine ?? ""})).child("New workspace")] : []),
       ] : [];
-      if (folded) return [head, ...menu];
+      if (folded || rebuilt) return [head, ...menu];
       const content = [], emitted = new Set();
       for (const r of mine) {
         if (!r.g) { content.push(this.row(r,t,compact)); continue; }
@@ -598,6 +724,7 @@ export default class Spaces extends View {
       !bindings.some(other => other.keys === k.keys && priority(other.section) > priority(k.section)));
     const helpHint = help ? `Keybinds (${help.keys})` : "Keybinds";
     return v_flex().size_full().min_h(0).pt(12).bg(t.chrome).text_size(this.metrics.fontSize).child(tabs)
+      .track_focus(this.handle).on_key_down((event, cx) => this.keyboard(event, cx))
       .on_mouse_up("left", (_e, cx) => this.cancelDrag(cx))
       .on_hover((on, cx) => { if (!on) this.cancelDrag(cx); })
       .child(v_flex().flex_1().min_h(0).overflow_y_scrollbar().mode("always")

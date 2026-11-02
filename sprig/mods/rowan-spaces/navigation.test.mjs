@@ -6,7 +6,7 @@ import {readFile} from 'node:fs/promises';
 // Exercise the real mod class with only its host APIs replaced; no live app or core.
 async function setup() {
   const saved = new Map(), calls = [], values = new Map();
-  const world = {spaces: [], panes: [], machines: [{name: null, layout: 'ready'}], focus: null, settings: {font_size: 15, zoom: 1}, keys: [], layout: 'rowan-terminal'};
+  const world = {spaces: [], panes: [], machines: [{name: null, layout: 'ready'}], focus: null, settings: {font_size: 15, zoom: 1}, keys: [], layout: 'rowan-terminal', applyMoves: true, ackMoves: true, hc: async () => ({code: 0, stdout: '{"machines":[]}'})};
   const localStorage = {getItem: k => saved.get(k) ?? null, setItem: (k, v) => saved.set(k, v)};
   // Every fluent element call returns the same object, including conditional children.
   function el() {
@@ -33,15 +33,19 @@ async function setup() {
       settings: () => world.settings,
       focused: () => world.focus, run: (name, args) => {
         calls.push({name, args});
-        if (name === 'space.move') {
+        if (name === 'space.move' && world.applyMoves) {
           const from = world.spaces.findIndex(s => s.id === args.id);
           const [moving] = world.spaces.splice(from, 1);
           world.spaces.splice(args.index - 1, 0, moving);
+          if (world.ackMoves) {
+            const machine = world.machines.find(m => m.name === moving.machine);
+            if (machine) machine.space_order = world.spaces.filter(s => s.machine === moving.machine).map(s => s.id);
+          }
         }
       },
       shared: key => values.get(key), setShared: (key, value) => values.set(key, value),
       theme: () => ({dim: 'dim', foreground: 'fg', selected: 'selected', hover: 'hover', chrome: 'chrome', unknown: 'unknown'}),
-      window: () => ({active: false, layout_name: world.layout}), keys: () => world.keys, openOverlay() {}, exec() {}, hc() {}, watchFolder() {}, nextCommand() {},
+      window: () => ({active: false, layout_name: world.layout}), keys: () => world.keys, openOverlay() {}, exec() {}, hc: args => world.hc(args), watchFolder() {}, nextCommand() {},
     },
   };
   const source = await readFile(new URL('./main.js', import.meta.url), 'utf8');
@@ -56,7 +60,7 @@ async function setup() {
   await main.evaluate();
   const create = () => {
     const instance = new main.namespace.default();
-    instance.init({}, {timer: {every() {}}, spawn() {}, notify() {}});
+    instance.init({}, {timer: {every() {}}, spawn() {}, notify() {}, focus_handle: () => ({focus() { values.set('spaces.keyboardFocus', true); }})});
     return instance;
   };
   const mod = create();
@@ -449,4 +453,136 @@ test('heading click jitter folds but cancelled, stale and cross-herd drags never
     mod.finishMachineDrag('id:remote', dragContext);
     assert.equal(mod.herd().members.join(','), before);
   }
+});
+
+test('workspace rows show names and stable tags, never branch metadata', async () => {
+  const {mod, world} = await setup();
+  const texts = node => typeof node === 'string' ? [node] : node?.items?.flatMap(texts) ?? [];
+  const find = (node, id) => node?.idValue === id ? node : node?.items?.map(x => find(x, id)).find(Boolean);
+  for (const branch of ['main', 'feature/visible-branch', 'worktree/quiet-river', '(detached)']) {
+    const workspace = {...space('a'), name: 'Graph UI', branch};
+    world.spaces = [workspace]; mod.shown = new Set(['a']); mod.inventory(world.spaces);
+    const metadata = git(null, workspace.folder, '/project/.git');
+    mod.git[metadata.key] = {...metadata.value, branch};
+    const row = find(mod.render({spawn: fn => fn()}), 'space-a');
+    const rendered = texts(row);
+    assert.ok(rendered.includes('Graph UI'));
+    assert.ok(rendered.includes(mod.label(workspace)));
+    assert.ok(!rendered.some(text => text.includes(branch)));
+  }
+});
+
+test('focused sidebar keyboard selection stays within ready herd workspaces', async () => {
+  const {mod, world, calls, values} = await setup();
+  world.spaces = [space('a'), space('b'), space('remote', 'ash')];
+  mod.shown = new Set(world.spaces.map(s => s.id));
+  world.machines.push({name: 'ash', layout: 'ready'});
+  mod.machines = [{id: 'ash-id', name: 'ash'}]; mod.inventory(world.spaces);
+  mod.command('herd-add'); mod.command('machine-move:ash:1'); mod.command('herd-select:0');
+  world.focus = {space: 'a', tab: 'a-tab'}; calls.length = 0;
+  mod.command('focus');
+  const cx = {notify() {}, stop_propagation() {}};
+  mod.keyboard({key: 'down', modifiers: {}}, cx);
+  assert.equal(values.get('spaces.keyboardFocus'), true);
+  assert.equal(mod.cursor, 'b');
+  assert.equal(calls.length, 0);
+  mod.keyboard({key: 'enter', modifiers: {}}, cx);
+  assert.equal(calls.at(-1).args.id, 'b');
+  mod.cursor = 'remote'; calls.length = 0;
+  mod.keyboard({key: 'enter', modifiers: {}}, cx);
+  assert.equal(calls.length, 0);
+  mod.keyboard({key: 'escape', modifiers: {}}, cx);
+  assert.deepEqual(JSON.parse(JSON.stringify(calls.at(-1))), {name: 'pane.go', args: {direction: 'right'}});
+});
+
+test('explicit workspace moves retry lost writes without stealing focus or reordering new work', async () => {
+  const {mod, world, calls} = await setup();
+  const a = space('a'), b = space('b');
+  world.spaces = [a, b]; mod.inventory(world.spaces);
+  world.focus = {space: 'a', tab: 'a-tab'};
+  world.applyMoves = false;
+  mod.queueMove(a, b);
+  const first = mod.ordering.at;
+  assert.deepEqual(world.spaces.map(s => s.id), ['a', 'b']);
+  mod.reconcileOrder(first + 999);
+  assert.equal(calls.length, 1);
+  world.applyMoves = true;
+  mod.reconcileOrder(first + 1000);
+  assert.deepEqual(world.spaces.map(s => s.id), ['b', 'a']);
+  assert.equal(world.focus.space, 'a');
+  mod.reconcileOrder(first + 1001);
+  assert.equal(mod.ordering, null);
+  world.applyMoves = false;
+  mod.queueMove(a, b);
+  world.spaces.push(space('new'));
+  const before = calls.length;
+  mod.reconcileOrder(Date.now() + 2000);
+  assert.equal(mod.ordering, null);
+  assert.equal(calls.length, before);
+});
+
+test('optimistic order cannot retire a drag before a delayed conflict is retried and acknowledged', async () => {
+  const {mod, world, calls} = await setup();
+  const a = space('a'), b = space('b');
+  world.spaces = [a, b]; world.machines[0].space_order = ['a', 'b'];
+  world.ackMoves = false; mod.inventory(world.spaces);
+  world.focus = {space: 'a', tab: 'a-tab'};
+  mod.queueMove(a, b);
+  const started = mod.ordering.at;
+  assert.deepEqual(world.spaces.map(s => s.id), ['b', 'a']);
+  mod.reconcileOrder(started + 250);
+  assert.ok(mod.ordering);
+  assert.equal(calls.length, 1);
+  // A late CAS rejection rolls the optimistic projection back to the core order.
+  world.spaces = [a, b];
+  mod.reconcileOrder(started + 1001);
+  assert.deepEqual(world.spaces.map(s => s.id), ['b', 'a']);
+  assert.equal(calls.length, 2);
+  assert.ok(mod.ordering);
+  world.machines[0].space_order = ['b', 'a'];
+  mod.reconcileOrder(started + 1002);
+  assert.equal(mod.ordering, null);
+  assert.equal(world.focus.space, 'a');
+});
+
+test('rebuilt profile identity retains herd position and visible workspace tags', async () => {
+  const {mod, world} = await setup();
+  const remote = space('ash/one', 'ash');
+  world.spaces = [remote]; world.machines.push({name: 'ash', layout: 'ready'});
+  mod.machines = [{id: 'old', name: 'ash'}]; mod.inventory(world.spaces);
+  mod.command('herd-add'); mod.command('machine-move:ash:1');
+  const tag = mod.label(remote);
+  mod.machines = [{id: 'replacement', name: 'ash'}]; mod.inventory(world.spaces);
+  assert.deepEqual(Array.from(mod.herd().members), ['id:replacement']);
+  assert.equal(mod.state.herds[0].members.includes('id:replacement'), false);
+  assert.equal(mod.label(remote), tag);
+  assert.equal(mod.state.profiles['id:old'], undefined);
+});
+
+test('rebuilt machine retry persists successful removal and never repairs ordinary offline peers', async () => {
+  const {mod, create, world, saved} = await setup();
+  const machine = {name: 'ash', id: 'old', state: 'unreachable', why: 'a different core answers there ("new")', target: 'host', session: 'auri'};
+  mod.machines = [machine]; mod.inventory([]);
+  const jobs = [], requests = [];
+  const cx = {notify() {}, spawn: fn => jobs.push(fn)};
+  let fail = true;
+  world.hc = async args => {
+    requests.push(args);
+    if (args[1] === 'add' && fail) return {code: 1, stdout: '{"error":{"message":"temporarily unavailable"}}'};
+    return {code: 0, stdout: '{"machines":[]}'};
+  };
+  mod.reconnect(machine, cx);
+  while (jobs.length) await jobs.shift()(cx);
+  assert.equal(JSON.parse(saved.get('machines.reconnecting')).ash.removed, true);
+  assert.equal(mod.reconnecting.ash.error, 'temporarily unavailable');
+  const reloaded = create();
+  fail = false; reloaded.reconnect(machine, cx);
+  while (jobs.length) await jobs.shift()(cx);
+  assert.equal(requests.filter(args => args[1] === 'rm').length, 1);
+  assert.ok(requests.filter(args => args[1] === 'add').every(args => args.includes('auri')));
+  assert.equal(saved.get('machines.reconnecting'), '{}');
+  const before = requests.length;
+  reloaded.reconnect({...machine, name: 'unrelated', why: 'connection refused'}, cx);
+  assert.equal(jobs.length, 0);
+  assert.equal(requests.length, before);
 });

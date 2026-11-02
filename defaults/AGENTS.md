@@ -934,7 +934,9 @@ All of it is in `herdr.d.ts`. In short:
 - Live data: `spaces()` (each with its tabs, status, name, named, folder,
   machine, branch), `machines()` (name, null for this computer; layout:
   `loading`, `ready`, or `unavailable` on this connection; loading ends on
-  the first read even if it fails, and offline machines are unavailable),
+  the first read even if it fails, and offline machines are unavailable;
+  `space_order` is the last core-acknowledged workspace order as qualified IDs,
+  or null before the first document read—unlike optimistic `spaces()`),
   `agents()` (status, app, space, tab, pinned, focused; "done" turns "idle"
   once someone looks at it on any Herdr client), `terminals()`
   (every core terminal), `focused()`, `layout()`, `theme()` (every color by

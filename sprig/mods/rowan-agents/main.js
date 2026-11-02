@@ -41,7 +41,7 @@ function title(tab, l) {
   const prog = l?.program?.name;
   const live = clean(l?.title);
   const telling = live && live !== prog && !/^[~/]|^[A-Za-z]:\\/.test(live) && !live.includes("@") && live.toLowerCase() !== l?.program?.key;
-  return tab.name === prog && telling ? live : tab.name;
+  return (tab.name === prog || !tab.named) && telling ? live : tab.name;
 }
 const RANK = { blocked: 4, done: 3, working: 2, idle: 1 };
 // A sub-agent without a pane isn't in agents(): its raw word, error counting as
@@ -78,13 +78,21 @@ export default class Agents extends View {
     this.folded = new Set();
     // Each agent's last state and when it changed (ms), kept across restarts.
     this.changed = JSON.parse(localStorage.getItem("changed") ?? "{}");
-    this.pins = JSON.parse(localStorage.getItem("pins") ?? "[]");
+    this.pendingPins = JSON.parse(localStorage.getItem("pins") ?? "[]");
+    if (!this.pendingPins.length) localStorage.removeItem("pins");
+    this.migratingPins = new Set();
+    this.handle = cx.focus_handle();
     cx.timer.every(30000, (cx) => cx.notify());
     this.order = [];
     this.syncPanelSize(cx);
     cx.spawn(async (cx) => {
       for (;;) {
         const command = await nextCommand();
+        if (command === "focus") {
+          this.handle.focus();
+          cx.notify();
+          continue;
+        }
         if (command === "panel-toggle" || command === "panel-expand" || command === "panel-collapse" ||
             command === "rowan-agents.panel-toggle" || command === "rowan-agents.panel-expand" || command === "rowan-agents.panel-collapse") {
           const action = command.split(".").at(-1);
@@ -144,19 +152,52 @@ export default class Agents extends View {
     localStorage.setItem("changed", JSON.stringify(this.changed));
   }
 
-  setPins(pins) {
-    this.pins = pins;
-    localStorage.setItem("pins", JSON.stringify(pins));
+  // Retire legacy pins only after the shared decision has been observed.
+  // A shared marker distinguishes an explicit unpin from an untouched terminal.
+  migratePins(all, listed) {
+    const live = new Map(all.filter(t => t.state === "live").map(t => [t.address, t]));
+    const agentsByAddress = new Map(listed.map(a => [a.address, a]));
+    const pending = this.pendingPins.filter(address => {
+      const terminal = live.get(address);
+      const agent = agentsByAddress.get(address);
+      if (!terminal || !agent) return true;
+      if (terminal.labels?.["herdr.pin-migrated"] || agent.pinned) return false;
+      if (!this.migratingPins.has(address)) {
+        this.migratingPins.add(address);
+        run("terminal.pin", { terminal: address, pinned: true });
+      }
+      return true;
+    });
+    if (pending.length === this.pendingPins.length) return;
+    this.pendingPins = pending;
+    if (pending.length) localStorage.setItem("pins", JSON.stringify(pending));
+    else localStorage.removeItem("pins");
   }
 
-  // Drops pins of agents that ended. Only for machines the list has heard from:
-  // right after a start, or while a machine connects, its agents aren't listed yet.
-  prunePins(all) {
-    const machine = (addr) => (addr.includes("/") ? addr.split("/")[0] : "");
-    const heard = new Set(all.map((k) => machine(k.address)));
-    const live = new Set(all.filter((k) => k.state === "live").map((k) => k.address));
-    const kept = this.pins.filter((p) => !heard.has(machine(p)) || live.has(p));
-    if (kept.length !== this.pins.length) this.setPins(kept);
+  key(e, cx) {
+    if (e.modifiers?.control || e.modifiers?.platform || e.modifiers?.alt) return;
+    const scope = shared("rowan.sidebar.scope");
+    const ids = new Set(Array.isArray(scope?.spaceIds) ? scope.spaceIds : []);
+    const current = new Map(agents().filter(a => ids.has(a.space)).map(a => [a.address, a]));
+    const list = (this.visibleAgents ?? []).map(a => current.get(a.address)).filter(Boolean);
+    const index = list.findIndex(a => a.address === this.cursor);
+    if (e.key === "down" || e.key === "up") {
+      if (this.panelCollapsed()) this.setPanelCollapsed(false, cx);
+      else if (list.length) this.cursor = list[index < 0 ? (e.key === "down" ? 0 : list.length - 1)
+        : (index + (e.key === "down" ? 1 : -1) + list.length) % list.length].address;
+    } else if (e.key === "enter") {
+      const agent = list[index];
+      if (agent) { this.cursor = null; run("pane.focus", { pane: agent.pane }); }
+      else if (this.panelCollapsed()) this.setPanelCollapsed(false, cx);
+    } else if (e.key === "p") {
+      const agent = list[index];
+      if (agent) run("terminal.pin", { terminal: agent.address, pinned: !agent.pinned });
+    } else if (e.key === "left" || e.key === "right" || e.key === "escape") {
+      this.cursor = null;
+      run("pane.go", { direction: e.key === "left" ? "left" : "right" });
+    } else return;
+    cx.stop_propagation();
+    cx.notify();
   }
 
   since(a) {
@@ -268,9 +309,11 @@ export default class Agents extends View {
     const sort = sortOf();
     const scope = shared("rowan.sidebar.scope");
     const spaceIds = new Set(Array.isArray(scope?.spaceIds) ? scope.spaceIds : []);
-    let list = agents().filter(a => spaceIds.has(a.space));
+    const allAgents = agents();
+    let list = allAgents.filter(a => spaceIds.has(a.space));
     this.listed = new Map(list.map((a) => [a.address, a.status]));
     const all = terminals();
+    this.migratePins(all, allAgents);
     const shown = focused()?.agent;
     const now = Date.now();
     this.track(list, now);
@@ -279,14 +322,15 @@ export default class Agents extends View {
     const urgency = new Map(list.map((a) => [a.address, Math.max(this.rank(a), ...this.tree(all, a.address).map((s) => RANK[kidStatus(s.t, this.listed)] ?? 0))]));
     const rankOf = (a) => urgency.get(a.address);
     if (byPriority) list = [...list].sort((x, y) => rankOf(y) - rankOf(x) || this.since(y) - this.since(x) || y.seq - x.seq);
-    this.prunePins(all);
-    const pinned = this.pins.map((p) => list.find((a) => a.address === p)).filter(Boolean);
-    const rest = list.filter((a) => !this.pins.includes(a.address));
+    const pinned = list.filter(a => a.pinned);
+    const rest = list.filter(a => !a.pinned);
     list = [...pinned, ...rest];
     setAgentOrder(list.map((a) => a.address));
     this.order = list.map(a => a.address);
+    if (panelCollapsed) { this.visibleAgents = []; this.cursor = null; }
 
     if (panelCollapsed) return h_flex()
+      .track_focus(this.handle).on_key_down((e, cx) => this.key(e, cx))
       .id("agents-panel-toggle")
       .size_full().px(8).items_center().gap(4)
       .bg(t.chrome).border_t(1).border_color(t.border)
@@ -363,7 +407,7 @@ export default class Agents extends View {
       }
       const when = this.since(a);
       const idle = a.status === "idle" && !a.focused;
-      const isPinned = this.pins.includes(a.address);
+      const isPinned = a.pinned;
       const pin = div()
         .id(`pin-${a.address}`)
         .flex_none()
@@ -374,7 +418,7 @@ export default class Agents extends View {
         .tooltip(isPinned ? "Unpin" : "Pin to the top")
         .on_click((_e, cx) => {
           cx.stop_propagation();
-          this.setPins(isPinned ? this.pins.filter((p) => p !== a.address) : [...this.pins, a.address]);
+          run("terminal.pin", { terminal: a.address, pinned: !isPinned });
           // The row moves away from under the pointer, and no hover-out comes.
           this.hovered = null;
           cx.notify();
@@ -393,7 +437,7 @@ export default class Agents extends View {
         .flex_none()
         .items_center()
         .gap(9)
-        .when(a.focused, (el) => el.bg(t.selected))
+        .when(a.focused || this.cursor === a.address, (el) => el.bg(t.selected))
         .cursor_pointer()
         .hover((s) => s.bg(t.hover))
         .on_hover((on, cx) => {
@@ -456,11 +500,14 @@ export default class Agents extends View {
           .when(!byPriority && top && top !== "idle", (el) => el.child(this.status(t, { status: top }, true)))
           .child(svg("mods/workspace-chrome/chevron-right.svg").size(11).flex_none().text_color(t.dim)));
     };
+    this.visibleAgents = collapsed ? list : groups.flatMap(g => this.folded.has(g.id) ? [] : g.members);
+    if (!this.visibleAgents.some(a => a.address === this.cursor)) this.cursor = null;
     const rows = collapsed
       ? list.flatMap(withKids)
       : groups.flatMap((g) => [header(g), ...(this.folded.has(g.id) ? [] : g.members.flatMap(withKids))]);
 
     return v_flex()
+      .track_focus(this.handle).on_key_down((e, cx) => this.key(e, cx))
       .size_full()
       .min_h(0)
       .bg(t.chrome)
@@ -488,26 +535,15 @@ export default class Agents extends View {
         el.child(div().px(12).text_size(this.font(12)).text_color(t.dim).child(scope ? "No agents in this herd." : "Loading herd…")),
       )
       .child(v_flex().id("ag-list").flex_1().min_h(0).overflow_y_scrollbar().mode("always").children(rows))
-      .child(
-        h_flex()
-          .h(28)
-          .px(12)
-          .items_center()
-          .justify_end()
-          .when(collapsed, (el) => el.justify_center().px(0))
-          .child(
-            div()
-              .id("collapse")
-              .text_size(this.font(13))
-              .text_color(t.dim)
-              .hover((s) => s.text_color(t.foreground))
-              .on_click(() => {
-                const next = !collapsed;
-                setShared("sidebar.collapsed", next);
-                run("layout.resize", { id: "sidebar", px: next ? 44 : (shared("sidebar.width") ?? 240) });
-              })
-              .child(collapsed ? "»" : ""),
-          ),
-      );
+      .when(collapsed, el => el.child(
+        h_flex().h(28).items_center().justify_center().child(
+          div().id("collapse").text_size(this.font(13)).text_color(t.dim)
+            .hover(s => s.text_color(t.foreground))
+            .on_click(() => {
+              setShared("sidebar.collapsed", false);
+              run("layout.resize", { id: "sidebar", px: shared("sidebar.width") ?? 240 });
+            }).child("»"),
+        ),
+      ));
   }
 }

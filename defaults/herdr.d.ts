@@ -129,8 +129,10 @@ export interface SpaceInfo {
 }
 
 /** Machines' layout documents on this connection. Null names this computer.
- * Loading ends after the first read, including failures; unavailable includes offline cores. */
-export function machines(): { name: string | null; layout: "loading" | "ready" | "unavailable" }[];
+ * Loading ends after the first read, including failures; unavailable includes offline cores.
+ * space_order is the last core-acknowledged workspace order (qualified ids), not optimistic spaces().
+ * It is null before any document has been read. */
+export function machines(): { name: string | null; layout: "loading" | "ready" | "unavailable"; space_order: string[] | null }[];
 
 /** Spaces in order. Mods re-render when they change. */
 export function spaces(): SpaceInfo[];

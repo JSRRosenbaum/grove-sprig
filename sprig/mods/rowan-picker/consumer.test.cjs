@@ -11,11 +11,20 @@ function host() {
   let machineList = [];
   let keyHandler;
   const calls = [];
+  const elements = [];
   const element = () => {
-    const el = new Proxy({}, { get(_target, name) {
+    const node = {};
+    const el = new Proxy(node, { get(target, name) {
       if (name === "on_key_down") return callback => { keyHandler = callback; return el; };
-      return () => el;
+      return (...args) => {
+        if (name === "id") target.id = args[0];
+        else if (name === "when" && args[0]) args[1](el);
+        else if (name === "top" || name === "bottom") target[name] = args[0];
+        else if (name === "on_scroll_wheel" || name === "on_size_change") target[name] = args[0];
+        return el;
+      };
     } });
+    elements.push(node);
     return el;
   };
   const sandbox = {
@@ -23,7 +32,7 @@ function host() {
     Input: { new: element }, InputState: {},
     spaces: () => world, machines: () => machineList, agents: () => [], terminals: () => [],
     shared: key => key === "rowan.sidebar.scope" ? scope : undefined,
-    setShared() {}, theme: () => ({}), props: () => ({overlay: "picker"}),
+    setShared() {}, theme: () => ({}), settings: () => ({zoom: 1}), props: () => ({overlay: "picker"}),
     closeOverlay: id => calls.push({name: "closeOverlay", id}),
     run: (name, args) => calls.push({name, args}),
   };
@@ -31,12 +40,14 @@ function host() {
     .replace(/^import .*;\n/gm, "").replace("export default class Picker", "class Picker");
   vm.runInNewContext(`${source}\nglobalThis.Picker = Picker;`, sandbox);
   const picker = new sandbox.Picker();
-  Object.assign(picker, {filter: "", showEarlier: true, at: 0, handle: {}, input: {}});
+  Object.assign(picker, {filter: "", showEarlier: true, at: 0, scroll: 0, handle: {}, input: {}});
   return {
     picker, calls,
     setScope(value) { scope = value; },
     setWorld(value) { world = value; },
     setMachines(value) { machineList = value; },
+    render() { elements.length = 0; picker.render(); },
+    node(id) { return elements.find(e => e.id === id); },
     key(key, modifiers = {}) { keyHandler({key, modifiers}, {stop_propagation() {}, notify() {}}); },
   };
 }
@@ -96,4 +107,28 @@ test("Ctrl+D cannot close a row after its scope or tab becomes stale", () => {
   assert.equal(h.calls[0].name, "closeOverlay");
   assert.equal(h.calls[1].name, "tab.close");
   assert.equal(h.calls[1].args.id, "tab-a");
+});
+
+test("keyboard and wheel keep long herd picker selections in view", () => {
+  const h = host();
+  const tabs = Array.from({length: 20}, (_, i) => ({id: `tab-${i}`, name: `Tab ${i}`}));
+  h.setWorld([{...a, tabs}]);
+  h.setMachines([{name: "local", layout: "ready"}]);
+  h.setScope({spaceIds: ["a"]});
+  h.render();
+  h.node("pk-list").on_size_change({height: 128}, {notify() {}});
+  h.render();
+  h.key("up");
+  h.render();
+  const selected = h.node("pk-tab-19");
+  assert.ok(selected);
+  assert.ok(selected.top >= 0 && selected.bottom >= 0);
+  h.key("down");
+  h.render();
+  assert.ok(h.node("pk-tab-0"));
+  h.node("pk-list").on_scroll_wheel({delta: {y: -64}}, {notify() {}});
+  h.render();
+  const current = h.node(`pk-tab-${h.picker.at}`);
+  assert.ok(current);
+  assert.ok(current.top >= 0 && current.bottom >= 0);
 });

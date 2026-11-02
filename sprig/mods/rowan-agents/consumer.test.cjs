@@ -5,9 +5,11 @@ const vm = require("node:vm");
 const path = require("node:path");
 
 // Execute the actual mod in a small host, replacing only its native imports.
-function host(initial = {}) {
+function host(initial = {}, storage = new Map(), backend = {}) {
   const state = new Map(Object.entries(initial));
   let currentAgents = [];
+  let currentTerminals = [];
+  let focusCount = 0;
   let focus = null;
   let resolveCommand;
   const calls = [];
@@ -23,6 +25,8 @@ function host(initial = {}) {
         else if (key === "children") target.childNodes.push(...args[0]);
         else if (key === "when") { if (args[0]) args[1](proxy); }
         else if (key === "on_click") target.handlers.click = args[0];
+        else if (key === "on_key_down") target.handlers.key = args[0];
+        else if (key === "on_hover") target.handlers.hover = args[0];
         else if (key === "text_size") target.fontSize = args[0];
         return proxy;
       };
@@ -31,6 +35,7 @@ function host(initial = {}) {
     return proxy;
   }
   const cx = { timer: { every() {} }, notify() {}, stop_propagation() {},
+    focus_handle() { return { focus() { focusCount++; } }; },
     spawn(fn) { if (fn.length) void fn(cx); else deferred.push(fn); } };
   const sandbox = {
     View: class {}, div: element, h_flex: element, v_flex: element, svg: element, image: element,
@@ -39,12 +44,16 @@ function host(initial = {}) {
     setShared: (key, value) => state.set(key, value),
     settings: () => ({ font_size: 15 }),
     theme: () => ({ chrome: "#000", border: "#111", dim: "#222", foreground: "#fff", hover: "#333" }),
-    agents: () => currentAgents, terminals: () => [], panes: () => [], spaces: () => [],
+    agents: () => backend.agents ?? currentAgents, terminals: () => backend.terminals ?? currentTerminals, panes: () => [], spaces: () => [],
     setAgentOrder: order => calls.push({ name: "setAgentOrder", order }),
     focused: () => focus,
-    run: (name, args) => calls.push({ name, args }),
+    run: (name, args) => { calls.push({ name, args }); backend.run?.(name, args); },
     nextCommand: () => new Promise(resolve => { resolveCommand = resolve; }),
-    localStorage: { getItem: () => null, setItem: () => {} },
+    localStorage: {
+      getItem: key => storage.get(key) ?? null,
+      setItem: (key, value) => storage.set(key, value),
+      removeItem: key => storage.delete(key),
+    },
   };
   let source = fs.readFileSync(path.join(__dirname, "main.js"), "utf8");
   source = source.replace(/^import .*;\n/gm, "").replace("export default class Agents", "class Agents");
@@ -55,9 +64,13 @@ function host(initial = {}) {
     metadata: sandbox.subject.metadata, metadataLines: sandbox.subject.metadataLines, instance, calls, state,
     setScope(value) { state.set("rowan.sidebar.scope", value); },
     setAgents(value) { currentAgents = value; },
+    setTerminals(value) { currentTerminals = value; },
+    focusCount() { return focusCount; },
     setFocus(value) { focus = value; },
     render() { elements.length = 0; return instance.render(cx); },
     click(id) { elements.find(e => e.id === id).handlers.click({}, cx); },
+    hover(id) { elements.find(e => e.id === id).handlers.hover(true, cx); },
+    key(key) { elements.find(e => e.handlers.key).handlers.key({ key }, cx); },
     flush() { for (const fn of deferred.splice(0)) void fn(); },
     async command(value) {
       resolveCommand(value);
@@ -190,4 +203,91 @@ test("panel consumes published font metrics and falls back to terminal size", ()
   h.render();
   assert.equal(h.instance.fontSize, 18);
   assert.ok(h.instance.rowHeight(26) >= 30);
+});
+
+test("shared pins and unpins propagate between panel clients", async () => {
+  const scope = { spaceIds: ["a"], labels: {} };
+  const backend = {
+    agents: [
+      { address: "t1", space: "a", pane: "p1", status: "idle", seq: 1, pinned: false },
+      { address: "t2", space: "a", pane: "p2", status: "idle", seq: 2, pinned: false },
+    ],
+    terminals: [{ address: "t1", state: "live", labels: {} }, { address: "t2", state: "live", labels: {} }],
+    run(name, args) {
+      if (name !== "terminal.pin") return;
+      this.agents.find(a => a.address === args.terminal).pinned = args.pinned;
+      const labels = this.terminals.find(t => t.address === args.terminal).labels;
+      labels["herdr.pin-migrated"] = "1";
+      if (args.pinned) labels["herdr.pinned"] = "1";
+      else delete labels["herdr.pinned"];
+    },
+  };
+  const one = host({ "rowan.sidebar.scope": scope, "rowan.agents.collapsed": false }, new Map(), backend);
+  const two = host({ "rowan.sidebar.scope": scope, "rowan.agents.collapsed": false }, new Map(), backend);
+  one.render();
+  one.hover("ag-t1");
+  one.render();
+  one.click("pin-t1");
+  two.render();
+  assert.equal(two.instance.order[0], "t1");
+  two.hover("ag-t1");
+  two.render();
+  two.click("pin-t1");
+  one.render();
+  assert.equal(backend.agents[0].pinned, false);
+  assert.equal(one.instance.order[0], "t2");
+});
+
+test("legacy pins wait for matching live agents and never override a shared decision", () => {
+  const storage = new Map([["pins", JSON.stringify(["local", "remote/offline", "other"])]]);
+  const h = host({ "rowan.sidebar.scope": { spaceIds: ["a"], labels: {} } }, storage);
+  h.setAgents([{ address: "local", space: "a", status: "idle", seq: 1 },
+    { address: "other", space: "a", status: "idle", seq: 2 }]);
+  h.setTerminals([{ address: "local", state: "live", labels: {} },
+    { address: "other", state: "live", labels: { "herdr.pin-migrated": "1" } },
+    { address: "remote/offline", state: "finished", labels: {} }]);
+  h.render();
+  assert.deepEqual(h.calls.filter(c => c.name === "terminal.pin").map(c => c.args.terminal), ["local"]);
+  assert.deepEqual(JSON.parse(storage.get("pins")), ["local", "remote/offline"]);
+  h.render();
+  assert.equal(h.calls.filter(c => c.name === "terminal.pin").length, 1);
+  h.setTerminals([{ address: "local", state: "live", labels: { "herdr.pin-migrated": "1", "herdr.pinned": "1" } },
+    { address: "remote/offline", state: "live", labels: {} }]);
+  h.render(); // a live terminal alone is not a listed agent
+  assert.deepEqual(JSON.parse(storage.get("pins")), ["remote/offline"]);
+  h.setAgents([{ address: "remote/offline", space: "b", status: "idle", seq: 1 }]);
+  h.render();
+  assert.equal(h.calls.filter(c => c.name === "terminal.pin").at(-1).args.terminal, "remote/offline");
+  h.setTerminals([{ address: "remote/offline", state: "live", labels: { "herdr.pin-migrated": "1" } }]);
+  h.render();
+  assert.equal(storage.has("pins"), false);
+});
+
+test("focus command restores keyboard focus and keyboard actions remain herd-scoped", async () => {
+  const h = host({ "rowan.sidebar.scope": { spaceIds: ["a"], labels: {} }, "rowan.agents.collapsed": false });
+  h.setAgents([
+    { address: "t1", space: "a", pane: "p1", status: "idle", seq: 1 },
+    { address: "t2", space: "a", pane: "p2", status: "idle", seq: 2 },
+    { address: "t3", space: "b", pane: "p3", status: "idle", seq: 3 },
+  ]);
+  h.render();
+  await h.command("focus");
+  assert.equal(h.focusCount(), 1);
+  h.key("down");
+  h.key("p");
+  assert.equal(h.calls.at(-1).name, "terminal.pin");
+  assert.equal(h.calls.at(-1).args.terminal, "t2");
+  h.key("down");
+  h.key("enter");
+  assert.equal(h.calls.at(-1).name, "pane.focus");
+  assert.equal(h.calls.at(-1).args.pane, "p1");
+  await h.command("focus");
+  assert.equal(h.focusCount(), 2);
+  h.key("right");
+  assert.equal(h.calls.at(-1).name, "pane.go");
+  assert.equal(h.calls.at(-1).args.direction, "right");
+  h.setScope({ spaceIds: ["b"], labels: {} });
+  h.key("down");
+  h.key("enter");
+  assert.notEqual(h.calls.at(-1).args.pane, "p1");
 });

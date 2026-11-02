@@ -1713,9 +1713,13 @@ impl AppWindow {
             Some(json!({ "space": p.id, "tab": ctx.id, "terminal": m.address_of(&pane), "shown": self.swapped.get(&pane),
                 "pane": pane, "agent": self.shown_agent(), "cwd": cwd }))
         });
-        let machines = self.documents.iter().map(|(name, slot)| json!({
-            "name": (!name.is_empty()).then_some(name), "layout": slot.layout(),
-        })).collect();
+        let machines = self.documents.iter().map(|(name, slot)| {
+            let machine = (!name.is_empty()).then_some(name.as_str());
+            let order = slot.document.as_ref().map(|document| {
+                document.space_ids().map(|id| crate::mirror::qualify(id, machine)).collect::<Vec<_>>()
+            });
+            json!({ "name": machine, "layout": slot.layout(), "space_order": order })
+        }).collect();
         let mut changed = mods::publish_machines(Value::Array(machines));
         changed |= mods::publish_spaces(Value::Array(spaces));
         changed |= mods::publish_agents(Value::Array(agents));
@@ -1866,7 +1870,7 @@ impl AppWindow {
         // The listing every 500 ms brings the machines alone: redraw only when
         // one's state moved, or the whole window draws twice a second for nothing.
         let shown = |d: &std::collections::BTreeMap<String, crate::mirror_sync::Slot>| {
-            d.iter().map(|(m, s)| (m.clone(), s.connected, s.available, s.blocked, s.error.clone(), s.layout())).collect::<Vec<_>>()
+            d.iter().map(|(m, s)| (m.clone(), s.connected, s.available, s.blocked, s.error.clone(), s.layout(), s.version)).collect::<Vec<_>>()
         };
         let (listing, was) = (results.is_empty(), shown(&self.documents));
         for (machine, result) in results {
