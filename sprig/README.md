@@ -109,17 +109,18 @@ Use `--app-home` / `--agent-home` for explicit alternate installation roots.
   navigation. Existing orders migrate once from Local-first/alphabetical ordering;
   newly discovered profiles append without reshuffling existing sections.
 - The sidebar follows the legacy terminal reference: centered herd tabs, centered
-  green machine separators, and dense single-line workspace/branch rows,
+  green machine separators, and dense single-line workspace rows,
   left status marks and right-aligned IDs. The large brand/footer blocks are absent;
   machines use the available area while Agents is collapsed, or four fifths when expanded.
-  The `main` branch suffix is hidden; other branch names remain visible.
+  Workspace rows never append branch metadata, including feature/worktree branches
+  and `(detached)`. Explicit workspace names, tree gutters, status marks and `w…`
+  tags are preserved.
 - Secondary UI text is deliberately readable: the Rowan layout owns `muted`
   (`#929dbf`), `dim` (`#8b97ba`), and `unknown` (`#929dbf`) color overrides.
   Both secondary text colors exceed 4.5:1 against the selected-row background;
   these are UI-only overrides, not terminal ANSI or SGR dim changes. Machine-title
   caps use the same green as their horizontal rules, with a brighter title.
-  Keeping these overrides on the layout also forces live refresh: the current app's
-  `settings::set` ignores a changed theme file when its settings compare equal.
+  Theme-file edits now repaint through the integrated upstream live-theme fix.
 - Repository folding lives on the parent workspace's chevron instead of a duplicate
   repository-heading row; the selected child remains visible. Expanded rows reserve
   a fixed gutter for fold chevrons and tree branches **before** the status mark,
@@ -129,12 +130,15 @@ Use `--app-home` / `--agent-home` for explicit alternate installation roots.
   workspace stays selected. Order is stored by Herdr Core, not a separate sidebar
   list; repository/worktree grouping still applies. Reorder arrows remain on hover.
   Releasing outside the sidebar cancels. Offline or cross-machine drops do nothing.
+  Explicit reorder intent survives optimistic model updates and late write conflicts;
+  it is retired only when the core-acknowledged order matches. Per-window machine
+  section order is never imposed globally on the core.
 - `w1`, `w2`, … are persistent **display aliases**, not core/API workspace IDs.
   They remain bound to the full machine-profile/space identity across row reordering,
   reload, and profile rename. Separate profiles on one host are not merged.
 - Ctrl+Alt+Up/Down cycles workspaces in the selected herd; Ctrl+Alt+Left/Right switches
-  herds and restores the remembered live space/tab/pane. Alt+1…9 selects by displayed
-  workspace order; Alt+Up/Down cycles that herd's agents.
+  herds and restores the remembered live space/tab/pane. Alt+Up/Down cycles that
+  herd's agents; Alt+1…9 selects a tab in the active workspace.
 - Empty/unavailable selections show a non-terminal surface. The Rowan layout guards
   implicit create/rename, tab, pane, and paste shortcuts from acting on an off-herd
   workspace. Explicit external core commands remain independent of this UI.
@@ -142,6 +146,15 @@ Use `--app-home` / `--agent-home` for explicit alternate installation roots.
   The panel starts collapsed: click the bottom `Agents ▸ N` strip to expand it and
   the `Agents ▾ N` header to collapse it. This preference survives reloads; scoped
   agent navigation continues to work while the panel is collapsed.
+  Pin/unpin state now uses core terminal labels and is shared across clients.
+  Legacy local pins migrate when their matching live terminal is observed; a shared
+  `herdr.pin-migrated` marker prevents stale Sprig copies from undoing an explicit
+  Sprig unpin. Clients that do not write this marker cannot fully order a concurrent
+  legacy migration against an unpin.
+  Pane navigation can focus Spaces or Agents. In Spaces, Up/Down moves the cursor,
+  Enter selects a ready workspace in the herd, and Escape returns right. In Agents,
+  Up/Down navigates, Enter selects, P toggles a shared pin, and Left/Right/Escape
+  leaves the panel. Opening/closing a popup restores the mod's keyboard focus.
   Newly launched OMP sessions publish session title, resolved provider/model, context
   percentage, and measured last-turn cache-read/write counts when available.
   No quota limit or cache-warmth estimate is invented.
@@ -150,6 +163,16 @@ Use `--app-home` / `--agent-home` for explicit alternate installation roots.
   Missing data is omitted. Labels are accepted only for a matching live OMP foreground
   PID and expire after ten minutes without a report. This is display metadata, not a
   lifecycle/session identity authority or a replacement for Herdr's managed hook.
+- A rebuilt remote machine offers **Connect** in its heading. Repair is explicit,
+  retains the SSH/via target and selected core session, and preserves herd placement
+  and visible workspace tags when the machine identity changes. A failed re-pair
+  remains retryable across reloads without removing the old binding a second time.
+- The Files panel follows directory symlinks, marks children of new untracked
+  folders, and preserves Windows Unicode/OneDrive paths. Git inspection suppresses
+  optional index/fsmonitor writes to avoid watcher feedback.
+- The + menu shows its cached agent list while refreshing the selected machine.
+  Unmodified 1…9 launches an installed agent; Terminal/New workspace hints use
+  effective configured shortcuts rather than hardcoded labels.
 
 ### Sidebar text size and panel controls
 
@@ -223,7 +246,7 @@ No synthetic input was sent to the person's desktop.
 Behavior checks:
 
 ```sh
-node --experimental-vm-modules --test mods/rowan-spaces/navigation.test.mjs mods/rowan-agents/consumer.test.cjs mods/rowan-picker/consumer.test.cjs
+node --experimental-vm-modules --test sprig/mods/rowan-spaces/navigation.test.mjs sprig/mods/rowan-agents/consumer.test.cjs sprig/mods/rowan-picker/consumer.test.cjs
 ```
 
 Rowan qualification on 2026-10-30: 22 behavior tests passed; all four mods have passed
@@ -237,15 +260,16 @@ preferences surviving mod reload; main font/zoom/key/settings files stayed uncha
 The existing OMP and shell PIDs survived unchanged. No Rust rebuild, legacy Herdr/Tern
 cutover, fleet deployment, or model request was part of this sidebar installation.
 
-To leave the sidebar immediately: `herdr-app do layout.switch --name square-dracula`.
+To leave the sidebar immediately: switch to a previously installed personal layout
+(or `herdr-app do layout.switch --name main` for the shipped layout).
 For the exact prior Rowan appearance and keys, restore the files listed in the first
 installation backup's manifest; keep backup originals until the result is verified.
 
 ## Gallery and recipe
 
 [RECIPE.md](RECIPE.md) describes Square Dracula's interface, implementation, limitations, and acceptance checks.
-This repository keeps the original Square Dracula recipe, screenshot, `layouts/`, and
-`mods/` together at its root and uses the GitHub topic `herdr-layout` for gallery discovery.
+The original Square Dracula recipe, screenshot, `layouts/`, and `mods/` are retained
+under `sprig/` for attribution and reference.
 
 [herdr.dev/layouts](https://herdr.dev/layouts/) handles indexing and screenshot moderation;
 a published repository may not appear immediately.

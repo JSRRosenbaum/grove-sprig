@@ -1,5 +1,8 @@
 {
   "layout:rowan-terminal": {
+    "ctrl-?": "app.help",
+    "ctrl-insert": "terminal.copy",
+    "shift-insert": "rowan-spaces.active:terminal.paste",
     "ctrl-space": "rowan-spaces.prefix-cancel",
     "ctrl-space escape": "rowan-spaces.prefix-cancel",
     "ctrl-space c": "rowan-spaces.active:tab.new",

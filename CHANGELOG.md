@@ -1,5 +1,21 @@
 # Herdr changelog
 
+## Sprig upstream integration — 2026-11-02
+
+- Integrated all upstream app changes through `71d3e8f`, including released
+  0.1.10–0.1.12 improvements and reviewed master fixes, while retaining concurrent
+  independent windows, native prefix/help and the compact herd interface.
+- Adopted core `421c5ab` (0.1.17 plus dead-display, CRLF-template and current-folder
+  fixes), built on Ash. Source pins are in `sprig/upstreams.json`.
+- Ported shared pins and legacy migration, focusable Spaces/Agents, picker scrolling,
+  rebuilt-machine repair, cached agent menus and Files fixes into the active mods.
+- Removed every branch suffix from sidebar workspace rows without changing names,
+  tree/status gutters or persistent display tags.
+- Added acknowledged machine `space_order` metadata so sidebar drag intent survives
+  optimistic updates and late core write conflicts without forcing per-window herd
+  ordering into shared state.
+- Included upstream opt-in `font_ligatures`; existing preferences remain unchanged.
+
 ## Sprig consolidation — 2026-11-02
 
 - Consolidated the custom native app and Square Dracula/Rowan mods in
