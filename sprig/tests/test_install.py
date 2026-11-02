@@ -32,6 +32,13 @@ class InstallerTests(unittest.TestCase):
         shutil.copytree(SOURCE / 'themes', self.source / 'themes')
         shutil.copytree(SOURCE / 'extensions', self.source / 'extensions')
         shutil.copy2(SOURCE / 'rowan-keys.json', self.source / 'rowan-keys.json')
+        shutil.copy2(SOURCE / 'legacy_plugins.py', self.source / 'legacy_plugins.py')
+        shutil.copy2(SOURCE / 'legacy_worktrees.py', self.source / 'legacy_worktrees.py')
+        shutil.copy2(SOURCE / 'legacy_scifi_panel.py', self.source / 'legacy_scifi_panel.py')
+        shutil.copy2(SOURCE / 'legacy_review.py', self.source / 'legacy_review.py')
+        shutil.copytree(SOURCE / 'plugin_runtimes', self.source / 'plugin_runtimes')
+        self.config = self.root / 'legacy.toml'
+        self.config.write_text('[keys]\nprefix = "ctrl+space"\n')
         shutil.copytree(SOURCE.parent / 'defaults', self.root / 'defaults')
         self.app = self.root / 'alternate-app'
         self.agent = self.root / 'alternate-agent'
@@ -42,7 +49,7 @@ class InstallerTests(unittest.TestCase):
 
     def install(self):
         self.counter += 1
-        installer.install(self.app, self.agent, self.root / f'backup-{self.counter}')
+        installer.install(self.app, self.agent, self.root / f'backup-{self.counter}', self.config)
 
     def put(self, path, content):
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -57,13 +64,23 @@ class InstallerTests(unittest.TestCase):
         self.put(self.agent / 'extensions/personal.ts', b'personal extension')
         self.install()
         keys = json.loads((self.app / 'keys.json').read_bytes())
-        self.assertEqual(keys['global'], original['global'])
-        self.assertEqual(keys['layout:rowan-terminal']['custom'], 'mine')
-        self.assertEqual(keys['layout:rowan-terminal']['ctrl-space'], 'rowan-spaces.prefix-cancel')
+        self.assertEqual(keys['global'], {})
+        self.assertNotIn('custom', keys['layout:rowan-terminal'])
+        self.assertEqual(keys['layout:rowan-terminal']['ctrl-space escape'], 'legacy.prefix_cancel')
+        self.assertEqual(keys['terminal'], {})
+        backups = json.loads((self.root / 'backup-1/manifest.json').read_text())
+        key_backup = next(entry['backup'] for entry in backups if entry['path'] == str(self.app / 'keys.json'))
+        self.assertEqual(json.loads(Path(key_backup).read_text()), original)
         for name in preserved:
             self.assertEqual((self.app / name).read_bytes(), b'personal bytes')
         self.assertEqual((self.agent / 'extensions/personal.ts').read_bytes(), b'personal extension')
         self.assertTrue((self.agent / 'extensions/rowan-omp-display.ts').is_file())
+        self.assertTrue((self.app / 'legacy_worktrees.py').is_file())
+        self.assertTrue((self.app / 'legacy_scifi_panel.py').is_file())
+        self.assertTrue((self.app / 'legacy_review.py').is_file())
+        self.assertTrue((self.app / 'plugin_runtimes/workthreads/LICENSE').is_file())
+        self.assertTrue((self.app / 'plugin_runtimes/workthreads/herdr_workthreads/__main__.py').is_file())
+        self.assertTrue(os.access(self.app / 'plugin_runtimes/workthreads/herdr_workthreads_cli.py', os.X_OK))
         self.assertFalse((self.app / 'mods/square-dracula-agents').exists())
         self.assertFalse((self.app / 'mods/rowan-agents/consumer.test.cjs').exists())
 
@@ -87,6 +104,37 @@ class InstallerTests(unittest.TestCase):
         (self.source / 'mods/rowan-picker/main.js').unlink()
         before = snapshot(self.app), snapshot(self.agent)
         with self.assertRaises(FileNotFoundError):
+            self.install()
+        self.assertEqual((snapshot(self.app), snapshot(self.agent)), before)
+
+    def test_machine_profiles_compose_local_keys_or_use_server_keys(self):
+        self.config.write_text('[keys]\nprefix = "ctrl+space"\nremote_image_paste = "alt+v"\n')
+        rowan = self.root / 'rowan.toml'
+        rowan.write_text('[keys]\nremote_image_paste = "ctrl+v"\n[[keys.command]]\nkey = "prefix+a"\ntype = "plugin_action"\ncommand = "annotate.capture"\n')
+        ash = self.root / 'ash.toml'
+        ash.write_text('[keys]\nfocus_pane_left = "ctrl+alt+left"\n')
+        profiles = [f'Rowan={rowan}', f'Ash={ash}']
+        installer.install(self.app, self.agent, self.root / 'machine-backup-1', self.config, profiles)
+        metadata = json.loads((self.app / 'legacy-keys.json').read_text())
+        rowan_keys = metadata['machines']['Rowan']['bindings']['layout:rowan-terminal']
+        ash_keys = metadata['machines']['Ash']['bindings']['layout:rowan-terminal']
+        fallback = metadata['remote_default']['bindings']['layout:rowan-terminal']
+        self.assertEqual(rowan_keys['alt-v'], 'terminal.paste_image')
+        self.assertNotIn('ctrl-v', rowan_keys)
+        self.assertEqual(rowan_keys['ctrl-space a'], 'legacy.plugin:annotate.capture')
+        self.assertNotIn('ctrl-space a', ash_keys)
+        self.assertNotIn('ctrl-space a', fallback)
+        installer.install(self.app, self.agent, self.root / 'machine-backup-2', self.config, profiles, 'server')
+        metadata = json.loads((self.app / 'legacy-keys.json').read_text())
+        ash_keys = metadata['machines']['Ash']['bindings']['layout:rowan-terminal']
+        self.assertEqual(ash_keys['ctrl-alt-left'], 'rowan-spaces.active:pane.go:left')
+        self.assertEqual(metadata['machines']['Ash']['prefix'], ['ctrl-b'])
+
+    def test_invalid_legacy_config_leaves_existing_install_unchanged(self):
+        self.install()
+        before = snapshot(self.app), snapshot(self.agent)
+        self.config.write_text('[keys]\nnew_tab = "not-a-key"\n')
+        with self.assertRaises(ValueError):
             self.install()
         self.assertEqual((snapshot(self.app), snapshot(self.agent)), before)
 
@@ -118,13 +166,12 @@ class InstallerTests(unittest.TestCase):
                 self.install()
         self.assertEqual((snapshot(self.app), snapshot(self.agent)), before)
 
-    def test_fresh_install_retains_platform_shortcuts(self):
+    def test_fresh_install_replaces_platform_shortcuts(self):
         self.install()
-        default_name = 'keys.macos.json' if sys.platform == 'darwin' else 'keys.json'
-        defaults = json.loads((self.root / 'defaults' / default_name).read_text())
         installed = json.loads((self.app / 'keys.json').read_text())
-        for scope, bindings in defaults.items():
-            self.assertEqual(installed[scope], bindings)
+        self.assertEqual(installed['global'], {})
+        self.assertEqual(installed['terminal'], {})
+        self.assertNotIn('ctrl-1', installed['layout:rowan-terminal'])
 
     def test_symlink_ancestor_cannot_overwrite_external_files(self):
         outside = self.root / 'outside'
@@ -149,23 +196,15 @@ class InstallerTests(unittest.TestCase):
             self.install()
         self.assertEqual((snapshot(self.app), snapshot(self.agent), snapshot(outside)), before)
 
-    def test_removed_overlay_bindings_preserve_personal_edits(self):
-        overlay = self.source / 'rowan-keys.json'
-        bindings = json.loads(overlay.read_text())
-        bindings['layout:rowan-terminal'].update({'obsolete': 'old-action', 'personal': 'old-action'})
-        overlay.write_text(json.dumps(bindings))
+    def test_update_replaces_legacy_section_without_retaining_modern_keys(self):
         self.install()
         keys_path = self.app / 'keys.json'
         keys = json.loads(keys_path.read_text())
-        keys['layout:rowan-terminal']['personal'] = 'my-action'
+        keys['layout:rowan-terminal']['ctrl-1'] = 'tab.select:1'
         keys_path.write_text(json.dumps(keys))
-        del bindings['layout:rowan-terminal']['obsolete']
-        del bindings['layout:rowan-terminal']['personal']
-        overlay.write_text(json.dumps(bindings))
         self.install()
         installed = json.loads(keys_path.read_text())['layout:rowan-terminal']
-        self.assertNotIn('obsolete', installed)
-        self.assertEqual(installed['personal'], 'my-action')
+        self.assertNotIn('ctrl-1', installed)
 
     def test_update_removes_only_manifest_owned_stale_files(self):
         asset = self.source / 'mods/rowan-spaces/old.svg'
@@ -184,13 +223,11 @@ class InstallerTests(unittest.TestCase):
     def test_cli_explicit_roots_and_environment_defaults(self):
         app, agent = self.root / 'cli-app', self.root / 'cli-agent'
         env = dict(os.environ, HERDR_APP_HOME=str(self.root / 'env-app'), PI_CODING_AGENT_DIR=str(self.root / 'env-agent'))
-        subprocess.run([sys.executable, str(SOURCE / 'install.py'), '--app-home', str(app), '--agent-home', str(agent), '--backup-home', str(self.root / 'cli-backup')], env=env, check=True, capture_output=True)
-        defaults_name = 'keys.macos.json' if sys.platform == 'darwin' else 'keys.json'
-        defaults = json.loads((SOURCE.parent / 'defaults' / defaults_name).read_text())
-        self.assertEqual(json.loads((app / 'keys.json').read_text())['global'], defaults['global'])
+        subprocess.run([sys.executable, str(SOURCE / 'install.py'), '--legacy-config', str(self.config), '--app-home', str(app), '--agent-home', str(agent), '--backup-home', str(self.root / 'cli-backup')], env=env, check=True, capture_output=True)
+        self.assertEqual(json.loads((app / 'keys.json').read_text())['global'], {})
         self.assertFalse((self.root / 'env-app').exists())
-        subprocess.run([sys.executable, str(SOURCE / 'install.py'), '--backup-home', str(self.root / 'env-backup')], env=env, check=True, capture_output=True)
-        self.assertEqual(json.loads((self.root / 'env-app/keys.json').read_text())['global'], defaults['global'])
+        subprocess.run([sys.executable, str(SOURCE / 'install.py'), '--legacy-config', str(self.config), '--backup-home', str(self.root / 'env-backup')], env=env, check=True, capture_output=True)
+        self.assertEqual(json.loads((self.root / 'env-app/keys.json').read_text())['global'], {})
 
 
 if __name__ == '__main__':

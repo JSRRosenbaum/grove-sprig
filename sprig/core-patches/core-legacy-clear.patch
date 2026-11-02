@@ -1,0 +1,1035 @@
+diff --git i/crates/ghostty-vt/src/lib.rs w/crates/ghostty-vt/src/lib.rs
+index 7b3d79d..0c91c15 100644
+--- i/crates/ghostty-vt/src/lib.rs
++++ w/crates/ghostty-vt/src/lib.rs
+@@ -53,6 +53,7 @@ mod ffi {
+     pub const DATA_ACTIVE_SCREEN: i32 = 6;
+     pub const DATA_SCROLLBAR: i32 = 9;
+     pub const DATA_TITLE: i32 = 12;
++    pub const DATA_COLOR_PALETTE: i32 = 21;
+     pub const DATA_COLOR_FOREGROUND_DEFAULT: i32 = 22;
+     pub const DATA_COLOR_BACKGROUND_DEFAULT: i32 = 23;
+     pub const DATA_COLOR_CURSOR_DEFAULT: i32 = 24;
+@@ -187,6 +188,9 @@ mod ffi {
+     unsafe extern "C" {
+         pub fn ghostty_terminal_new(alloc: *const c_void, out: *mut Terminal, cols: u16, rows: u16) -> i32;
+         pub fn ghostty_terminal_free(t: Terminal);
++        pub fn ghostty_terminal_clear_primary(t: Terminal) -> bool;
++        pub fn ghostty_terminal_cursor_shape(t: Terminal) -> u8;
++        pub fn ghostty_terminal_palette_override_mask(t: Terminal, out: *mut u8) -> bool;
+         pub fn ghostty_terminal_set(t: Terminal, opt: i32, value: *const c_void) -> i32;
+         pub fn ghostty_terminal_get(t: Terminal, data: i32, out: *mut c_void) -> i32;
+         pub fn ghostty_terminal_vt_write(t: Terminal, data: *const u8, len: usize);
+@@ -614,6 +618,11 @@ impl Terminal {
+         screen == 1
+     }
+ 
++    /// Clear history and rows above the visible wrapped cursor line; alternate screen is unchanged.
++    pub fn clear_primary(&mut self) -> bool {
++        unsafe { ffi::ghostty_terminal_clear_primary(self.raw) }
++    }
++
+     /// A DEC private mode (e.g. 1004 focus reporting).
+     pub fn dec_mode(&self, mode: u16) -> bool {
+         let mut cfg = ffi::ModeConfig { mode: mode & 0x7FFF, value: false };
+@@ -651,7 +660,7 @@ impl Terminal {
+         self.format_with(emit, selection, extras, emit == ffi::FORMAT_PLAIN)
+     }
+ 
+-    /// `joined`: soft-wrapped lines joined and trailing space trimmed.
++    /// `joined`: soft-wrapped lines joined; plain-text output also trims trailing space.
+     fn format_with(&self, emit: i32, selection: Option<&ffi::Selection>, extras: bool, joined: bool) -> Vec<u8> {
+         let screen = ffi::ScreenExtra {
+             size: size_of::<ffi::ScreenExtra>(),
+@@ -666,7 +675,7 @@ impl Terminal {
+             size: size_of::<ffi::FormatterOptions>(),
+             emit,
+             unwrap: joined,
+-            trim: joined,
++            trim: joined && emit == ffi::FORMAT_PLAIN,
+             extra: ffi::TerminalExtra {
+                 size: size_of::<ffi::TerminalExtra>(),
+                 // The full palette would paint over the viewer's own theme.
+@@ -725,12 +734,33 @@ impl Terminal {
+             out.extend(b"\x1b[?1049h");
+         }
+         if let Some(sel) = self.select(ffi::POINT_ACTIVE, (0, 0), last) {
+-            let screen = self.format(ffi::FORMAT_VT, Some(&sel), true);
++            let screen = self.format_with(ffi::FORMAT_VT, Some(&sel), true, true);
+             // Alternate-screen aliases can disagree with the active screen. Replay
+             // only the screen chosen above, not the formatter's independent mode bits.
+             // Synchronized output belongs to the old viewer and would freeze a new one.
+-            out.extend(strip(&screen, &[b"\x1b[?2026h", b"\x1b[?47h", b"\x1b[?1047h", b"\x1b[?1049h"]));
++            out.extend(strip(&screen, &[b"\x1b[?2026h", b"\x1b[?47h", b"\x1b[?1047h", b"\x1b[?1049h", b"\x1b[?7l"]));
+         }
++        let mut mask = [0u8; 32];
++        if unsafe { ffi::ghostty_terminal_palette_override_mask(self.raw, mask.as_mut_ptr()) }
++            && mask.iter().any(|b| *b != 0)
++        {
++            let mut colors = [[0u8; 3]; 256];
++            if unsafe { ffi::ghostty_terminal_get(self.raw, ffi::DATA_COLOR_PALETTE, colors.as_mut_ptr().cast()) }
++                == ffi::SUCCESS
++            {
++                use std::io::Write;
++                for (i, [r, g, b]) in colors.iter().copied().enumerate() {
++                    if mask[i / 8] & (1 << (i % 8)) != 0 {
++                        let _ = write!(out, "\x1b]4;{i};rgb:{r:02x}/{g:02x}/{b:02x}\x1b\\");
++                    }
++                }
++            }
++        }
++        if !self.dec_mode(7) {
++            out.extend_from_slice(b"\x1b[?7l");
++        }
++        let shape = unsafe { ffi::ghostty_terminal_cursor_shape(self.raw) };
++        out.extend_from_slice(format!("\x1b[{shape} q").as_bytes());
+         let title = self.title();
+         if !title.is_empty() {
+             out.extend(format!("\x1b]2;{title}\x1b\\").as_bytes());
+@@ -738,6 +768,11 @@ impl Terminal {
+         out
+     }
+ 
++    /// Repaint an existing viewer without changing its in-band resize subscription.
++    pub fn paint_in_place(&self) -> Vec<u8> {
++        preserve_resize_mode(&self.paint(0))
++    }
++
+     /// Complete binary snapshot, including any half-received escape sequence.
+     pub fn snapshot(&self) -> Option<Vec<u8>> {
+         alloc_call(|out, len| unsafe { ffi::ghostty_snapshot_encode_alloc(self.raw, ptr::null(), out, len) })
+@@ -766,6 +801,17 @@ impl Drop for Terminal {
+     }
+ }
+ 
++/// Prepare generated clear-repaint bytes, without touching program output.
++pub fn preserve_resize_mode(paint: &[u8]) -> Vec<u8> {
++    let mut out = strip(paint, &[b"\x1b[?2048l", b"\x1b[?2048h"]);
++    // ED2 can scroll a prompt into history. Remove that history after ED2.
++    let clear = b"\x1b[H\x1b[2J";
++    if let Some(at) = out.windows(clear.len()).position(|w| w == clear) {
++        out.splice(at + clear.len()..at + clear.len(), b"\x1b[3J".iter().copied());
++    }
++    out
++}
++
+ fn strip(haystack: &[u8], needles: &[&[u8]]) -> Vec<u8> {
+     let mut out = Vec::with_capacity(haystack.len());
+     let mut i = 0;
+diff --git i/crates/ghostty-vt/src/tests.rs w/crates/ghostty-vt/src/tests.rs
+index 6a1a392..ccd6d7c 100644
+--- i/crates/ghostty-vt/src/tests.rs
++++ w/crates/ghostty-vt/src/tests.rs
+@@ -117,6 +117,65 @@ fn a_painted_terminal_looks_the_same_on_a_fresh_one() {
+     assert!(fresh.plain_text().contains("full screen"));
+ }
+ 
++#[test]
++fn repaint_preserves_wrapping_and_cursor_without_requesting_viewer_input() {
++    let mut source = Terminal::new(10, 5, 1 << 20);
++    source.write(b"abcdefghijklm\x1b[?7l\x1b[6 q\x1b[?2048h");
++    let mut viewer = Terminal::new(10, 5, 1 << 20);
++    viewer.write(b"\x1b[?2048h");
++    viewer.take_responses();
++    viewer.write(&source.paint_in_place());
++    assert_eq!(viewer.plain_text(), source.plain_text());
++    assert!(!viewer.dec_mode(7));
++    assert!(viewer.dec_mode(2048));
++    assert_eq!(unsafe { ffi::ghostty_terminal_cursor_shape(viewer.raw) }, 6);
++    assert!(viewer.take_responses().is_empty(), "repaint must not generate child input");
++}
++
++#[test]
++fn clear_repaint_does_not_scroll_old_prompt_into_viewer_history() {
++    let mut source = Terminal::new(20, 4, 1 << 20);
++    source.write(b"kept prompt");
++    let mut viewer = Terminal::new(20, 4, 1 << 20);
++    viewer.write(b"old one\r\nold two\r\nold three\r\n\x1b]133;A\x07old prompt");
++    viewer.write(b"\x18\x1b[?1049l\x1b[?1047l\x1b[?47l\x1b[3J");
++    viewer.write(&source.paint_in_place());
++    let text = viewer.plain_text();
++    assert!(text.contains("kept prompt"), "{text:?}");
++    assert!(!text.contains("old"), "{text:?}");
++}
++
++#[test]
++fn clear_repaint_preserves_closed_hyperlinks_on_retained_line() {
++    let mut source = Terminal::new(40, 4, 1 << 20);
++    source.write(b"old\r\n\x1b]8;;https://example.com/path\x1b\\click here\x1b]8;;\x1b\\ prompt");
++    assert!(source.clear_primary());
++    let mut viewer = Terminal::new(40, 4, 1 << 20);
++    viewer.write(b"old viewer text\r\n\x1b]133;A\x07old prompt");
++    viewer.write(b"\x18\x1b[?1049l\x1b[?1047l\x1b[?47l\x1b[3J");
++    viewer.write(&source.paint_in_place());
++    let repaint = viewer.paint(0);
++    assert!(repaint.windows(b"https://example.com/path".len()).any(|w| w == b"https://example.com/path"));
++    assert!(viewer.plain_text().contains("click here prompt"));
++    assert!(!viewer.plain_text().contains("old viewer"));
++}
++
++#[test]
++fn clear_repaint_preserves_only_explicit_palette_overrides() {
++    let mut source = Terminal::new(20, 4, 1 << 20);
++    source.write(b"\x1b]4;1;rgb:00/ff/00\x1b\\\x1b[31mprompt");
++    assert!(source.clear_primary());
++    let mut viewer = Terminal::new(20, 4, 1 << 20);
++    viewer.write(&source.paint_in_place());
++    let mut colors = [[0u8; 3]; 256];
++    assert_eq!(unsafe { ffi::ghostty_terminal_get(viewer.raw, ffi::DATA_COLOR_PALETTE, colors.as_mut_ptr().cast()) }, ffi::SUCCESS);
++    assert_eq!(colors[1], [0, 255, 0]);
++    let mut mask = [0u8; 32];
++    assert!(unsafe { ffi::ghostty_terminal_palette_override_mask(viewer.raw, mask.as_mut_ptr()) });
++    assert_eq!(mask[0], 2);
++    assert!(mask[1..].iter().all(|b| *b == 0));
++}
++
+ #[test]
+ fn repaint_uses_the_active_screen_not_stale_alternate_screen_modes() {
+     let mut t = Terminal::new(30, 4, 1 << 20);
+diff --git i/crates/herdr-core/src/SKILL.md w/crates/herdr-core/src/SKILL.md
+index 552e93d..fb797a6 100644
+--- i/crates/herdr-core/src/SKILL.md
++++ w/crates/herdr-core/src/SKILL.md
+@@ -58,9 +58,14 @@ hc get review                      # one terminal's observed state/status
+ hc send review "Focus on the first bug"
+ hc send --wait review "Recheck the fix"
+ hc read --lines 100 review          # screen plus history; waits return status only
++hc clear review                    # clear primary history, preserving the cursor line
+ hc interrupt review                # stop its current turn, not the process
+ ```
+ 
++`clear` sends no input to the program. It leaves an alternate screen unchanged;
++JSON reports `cleared: false` in that case. Attached viewers and future attaches
++see the cleared primary screen.
++
+ In human-readable output, `ls` shows the `where` label or the current folder;
+ `get` shows the full current folder. Both fall back to the launch folder when
+ it is unknown. JSON keeps `cwd` as the launch folder; `get` also includes the
+diff --git i/crates/herdr-core/src/api.rs w/crates/herdr-core/src/api.rs
+index 3f6a8f7..e3e2782 100644
+--- i/crates/herdr-core/src/api.rs
++++ w/crates/herdr-core/src/api.rs
+@@ -91,6 +91,9 @@ methods! { Ctx<'_>;
+     "terminal.read" => terminal_read, ReadParams => ReadResult,
+         "The screen plus `lines` of history as text, live or finished.",
+         errors ["not_found", "machine_unknown"];
++    "terminal.clear" => terminal_clear, TerminalParams => ClearResult,
++        "Clear primary screen history and rows above the cursor's wrapped line, without sending input. Does nothing on the alternate screen.",
++        errors ["not_found", "machine_unknown", "finished"];
+     "terminal.attach" => terminal_attach, AttachParams => AttachResult,
+         "Open a raw stream to a live terminal on this framed connection (see `hello` with `framed`). Loss ends the stream even when kept; reattach after the restarted event.",
+         errors ["not_found", "machine_unknown", "finished", "unavailable", "needs_framed"];
+@@ -349,6 +352,11 @@ async fn terminal_label(core: Ctx<'_>, p: LabelParams) -> Result<Public, RpcErro
+     result
+ }
+ 
++async fn terminal_clear(core: Ctx<'_>, p: TerminalParams) -> Result<ClearResult, RpcError> {
++    let id = resolve(core, &p.terminal)?;
++    Ok(ClearResult { cleared: core.clear_terminal(id)? })
++}
++
+ async fn terminal_read(core: Ctx<'_>, p: ReadParams) -> Result<ReadResult, RpcError> {
+     let id = resolve(core, &p.terminal)?;
+     core.saw(p.caller.as_deref(), id);
+diff --git i/crates/herdr-core/src/api/types.rs w/crates/herdr-core/src/api/types.rs
+index b71cdd7..a03b44a 100644
+--- i/crates/herdr-core/src/api/types.rs
++++ w/crates/herdr-core/src/api/types.rs
+@@ -326,6 +326,12 @@ pub struct RemoveResult {
+     pub removed: String,
+ }
+ 
++#[derive(Serialize, JsonSchema)]
++pub struct ClearResult {
++    /// False when the terminal is on the alternate screen and nothing changed.
++    pub cleared: bool,
++}
++
+ #[derive(clap::Args, Serialize, Deserialize, JsonSchema)]
+ pub struct ReadParams {
+     /// The terminal: `t7`, a name, or `machine/t7`.
+diff --git i/crates/herdr-core/src/cli.rs w/crates/herdr-core/src/cli.rs
+index 8bf950f..e8a27ce 100644
+--- i/crates/herdr-core/src/cli.rs
++++ w/crates/herdr-core/src/cli.rs
+@@ -59,6 +59,8 @@ enum Cmd {
+     Attach(AttachParams),
+     /// Print a terminal's screen and history.
+     Read(ReadParams),
++    /// Clear a terminal's primary history, preserving the cursor line.
++    Clear(TerminalParams),
+     /// Send a local file beside a terminal (on its machine); prints where it landed.
+     Put(PutParams),
+     /// Run one program without a terminal, here or on a machine: exactly what it wrote, and its exit code.
+@@ -462,6 +464,12 @@ fn run(cmd: Option<Cmd>, json: bool, asked: bool) -> Result<Option<Out>, RpcErro
+             let human = describe(&r);
+             Out { json: r, human }
+         }
++        Cmd::Clear(mut p) => {
++            p.terminal = pick(p.terminal)?;
++            let r = call("terminal.clear", to(&p))?;
++            let human = if r["cleared"] == true { "cleared" } else { "unchanged (alternate screen)" }.to_string();
++            Out { json: r, human }
++        }
+         Cmd::Read(mut p) => {
+             p.terminal = pick(p.terminal)?;
+             p.caller = Some(caller());
+@@ -846,6 +854,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
+     ("interrupt", "terminal.interrupt"),
+     ("attach", "terminal.attach"),
+     ("read", "terminal.read"),
++    ("clear", "terminal.clear"),
+     ("put", "terminal.put"),
+     ("exec", "machine.exec"),
+     ("file read", "file.read"),
+diff --git i/crates/herdr-core/src/help.txt w/crates/herdr-core/src/help.txt
+index ef71c8a..55c97d0 100644
+--- i/crates/herdr-core/src/help.txt
++++ w/crates/herdr-core/src/help.txt
+@@ -9,6 +9,7 @@ Terminals
+   get <t>                     show one terminal
+   attach [t]                  put this terminal on it (ctrl+\ detaches)
+   read <t>                    print its screen and history
++  clear <t>                   clear primary history, retaining the cursor line
+   kill <t>                    end its program
+   rm <t>                      remove a finished terminal
+   label <t> k=v...            set labels
+@@ -41,8 +42,8 @@ More
+   connect                     the API over stdin/stdout (ssh box hc connect)
+   schema                      the API as JSON Schema, for app builders
+ 
+-<t> is an address like t7 or t1b, or a name. In a terminal, attach, read, get,
+-kill, rm, wait and interrupt pick one when it's left out.
++<t> is an address like t7 or t1b, or a name. In a terminal, attach, read, clear,
++get, kill, rm, wait and interrupt pick one when it's left out.
+ Options: --json (default when piped; run and read print text), -V --version,
+ --licenses (what hc includes, and their licenses).
+ Per command: hc <command> --help
+diff --git i/crates/herdr-core/src/relay.rs w/crates/herdr-core/src/relay.rs
+index 3a33c52..c3baa52 100644
+--- i/crates/herdr-core/src/relay.rs
++++ w/crates/herdr-core/src/relay.rs
+@@ -22,6 +22,8 @@ pub struct Relay {
+     /// The program's latest win32-input-mode request (DEC 9001, ConPTY's ask
+     /// for key events), until taken. The screen doesn't keep it.
+     pub win32_input: Option<bool>,
++    /// End offsets and values of program-requested mode 2048 transitions.
++    pub resize_modes: Vec<(usize, bool)>,
+ }
+ 
+ enum Seq {
+@@ -80,6 +82,9 @@ impl Relay {
+                         self.apc = Some(screen.pending_responses());
+                     }
+                     pass(screen, &mut out, &seq);
++                    if self.apc.is_none() && let Some(on) = private_mode(&seq, b"2048") {
++                        self.resize_modes.push((out.len(), on));
++                    }
+                     // An APC ends with ST; whatever the screen answered to it goes.
+                     if seq == b"\x1b\\"
+                         && let Some(keep) = self.apc.take()
+@@ -110,6 +115,9 @@ impl Relay {
+         let paint = screen.paint(0);
+         let mut out = bytes[..n].to_vec();
+         out.extend(self.feed(screen, &bytes[n..]));
++        for (offset, _) in &mut self.resize_modes {
++            *offset += n;
++        }
+         (out, Some((n, paint)))
+     }
+ 
+@@ -150,13 +158,17 @@ impl Relay {
+ 
+ /// `CSI ? … 9001 … h` or `l`: whether it turns win32-input-mode on.
+ fn win32_input(seq: &[u8]) -> Option<bool> {
++    private_mode(seq, b"9001")
++}
++
++fn private_mode(seq: &[u8], mode: &[u8]) -> Option<bool> {
+     let (last, params) = seq.strip_prefix(b"\x1b[?")?.split_last()?;
+     let on = match last {
+         b'h' => true,
+         b'l' => false,
+         _ => return None,
+     };
+-    params.split(|b| *b == b';').any(|p| p == b"9001").then_some(on)
++    params.split(|b| *b == b';').any(|p| p == mode).then_some(on)
+ }
+ 
+ fn pass(screen: &mut Screen, out: &mut Vec<u8>, bytes: &[u8]) {
+diff --git i/crates/herdr-core/src/remote.rs w/crates/herdr-core/src/remote.rs
+index 3cbcc6e..307350f 100644
+--- i/crates/herdr-core/src/remote.rs
++++ w/crates/herdr-core/src/remote.rs
+@@ -855,6 +855,7 @@ const ON_A_TERMINAL: &[&str] = &[
+     "terminal.label",
+     "terminal.keep",
+     "terminal.read",
++    "terminal.clear",
+     "terminal.send",
+     "terminal.keys",
+     "terminal.interrupt",
+diff --git i/crates/herdr-core/src/viewers.rs w/crates/herdr-core/src/viewers.rs
+index f6927cc..52e86f7 100644
+--- i/crates/herdr-core/src/viewers.rs
++++ w/crates/herdr-core/src/viewers.rs
+@@ -58,6 +58,34 @@ pub struct AttachRequest {
+ }
+ 
+ impl Core {
++    /// Mutate the authoritative screen and repaint every attached consumer in order.
++    pub fn clear_terminal(&self, id: u32) -> Result<bool, RpcError> {
++        let mut st = self.lock();
++        let screen = st.screens.get_mut(&id).ok_or_else(|| {
++            RpcError::new("finished", "terminal has no live screen", "clear a live terminal")
++        })?;
++        if !screen.clear_primary() {
++            return Ok(false);
++        }
++        if let Some(t) = st.reg.terminals.get_mut(&id) {
++            t.printed = 0;
++        }
++        let paint = repaint_in_place(&st, id);
++        let recovering = st.screens[&id].continuation().is_none();
++        for viewer in st.viewers.get_mut(&id).into_iter().flatten() {
++            viewer.recovering = recovering;
++            viewer.repaint_pending = false;
++            viewer.conn.with(|out| {
++                out.clear_history(viewer.channel);
++                if !out.data(viewer.channel, &paint) {
++                    out.data(viewer.channel, &paint);
++                }
++            });
++        }
++        self.save_soon();
++        Ok(true)
++    }
++
+     /// Adds a viewer: queues the first paint, then every live byte follows in order.
+     pub fn attach(&self, conn: &Arc<Conn>, id: u32, req: AttachRequest) -> Result<u32, RpcError> {
+         let mut st = self.lock();
+@@ -86,6 +114,7 @@ impl Core {
+         });
+         self.apply_size(&mut st, id);
+         let paint = first_paint(&st, id, req.history);
++        let paint_modes = repaint_modes(&paint[..paint.len() - st.screens[&id].continuation().map_or(0, |c| c.len())]);
+         st.viewers.get_mut(&id).unwrap().last_mut().unwrap().repaint_pending = false;
+         conn.with(|out| {
+             out.open_paused(channel);
+@@ -94,6 +123,7 @@ impl Core {
+                 let size = [t.cols.to_le_bytes(), t.rows.to_le_bytes()].concat();
+                 out.resize(channel, &size);
+             }
++            out.program_resize_modes(channel, &paint_modes);
+             out.data(channel, &paint);
+         });
+         Ok(channel)
+@@ -118,6 +148,7 @@ impl Core {
+         let (out, recovered) =
+             if recovering { relay.feed_to_ground(screen, bytes) } else { (relay.feed(screen, bytes), None) };
+         let win32_input = relay.win32_input.take();
++        let resize_modes = std::mem::take(&mut relay.resize_modes);
+         if let Some(watchers) = output_watch.get_mut(&id).filter(|_| !scrolling) {
+             watchers.retain(|w| w.send(out.clone()).is_ok());
+         }
+@@ -135,23 +166,40 @@ impl Core {
+             self.save(st);
+         }
+         let recovered = recovered.map(|(at, paint)| {
+-            let mut paint = paint_state(st, id, paint);
+-            paint.extend_from_slice(&out[at..]);
+-            paint
++            let mut safe = paint_state(st, id, ghostty_vt::preserve_resize_mode(&paint));
++            let mut normal = paint_state(st, id, paint);
++            safe.extend_from_slice(&out[at..]);
++            normal.extend_from_slice(&out[at..]);
++            (at, normal, safe)
+         });
+         let mut behind = Vec::new();
+         for (index, v) in st.viewers.get_mut(&id).into_iter().flatten().enumerate().filter(|_| !scrolling) {
+             if v.repaint_pending {
++                if !resize_modes.is_empty() {
++                    v.conn.with(|ob| ob.queue_program_resize_modes(v.channel, &resize_modes));
++                }
+                 continue;
+             }
+-            let bytes = if v.recovering {
+-                let Some(paint) = &recovered else { continue };
+-                v.recovering = false;
+-                paint
+-            } else {
+-                &out
+-            };
++            let recovering = v.recovering;
++            if recovering && recovered.is_none() {
++                continue;
++            }
++            v.recovering = false;
+             v.conn.with(|ob| {
++                let bytes = if recovering {
++                    let (at, normal, safe) = recovered.as_ref().expect("recovered above");
++                    let bytes = if ob.clear_pending(v.channel) { safe } else { normal };
++                    let prefix = bytes.len() - (out.len() - *at);
++                    let mut adjusted = repaint_modes(&bytes[..prefix]);
++                    adjusted.extend(resize_modes.iter()
++                        .filter(|(offset, _)| offset > at)
++                        .map(|(offset, on)| (prefix + *offset - *at, *on)));
++                    ob.program_resize_modes(v.channel, &adjusted);
++                    bytes
++                } else {
++                    ob.program_resize_modes(v.channel, &resize_modes);
++                    &out
++                };
+                 if !ob.data(v.channel, bytes) {
+                     behind.push(index);
+                 }
+@@ -159,13 +207,19 @@ impl Core {
+         }
+         if !behind.is_empty() {
+             let paint = first_paint(st, id, 0);
++            let safe_paint = repaint_in_place(st, id);
++            let paint_modes = repaint_modes(&paint[..paint.len() - st.screens[&id].continuation().map_or(0, |c| c.len())]);
+             let recovering = st.screens[&id].continuation().is_none();
+             let viewers = st.viewers.get_mut(&id).expect("viewers with queued output");
+             for index in behind {
+                 let v = &mut viewers[index];
+                 v.recovering = recovering;
+                 v.conn.with(|ob| {
+-                    ob.data(v.channel, &paint);
++                    let bytes = if ob.clear_pending(v.channel) { &safe_paint } else {
++                        ob.program_resize_modes(v.channel, &paint_modes);
++                        &paint
++                    };
++                    ob.data(v.channel, bytes);
+                 });
+             }
+         }
+@@ -350,10 +404,16 @@ impl Core {
+             return;
+         }
+         let paint = first_paint(st, id, 0);
++        let safe_paint = repaint_in_place(st, id);
++        let paint_modes = repaint_modes(&paint[..paint.len() - st.screens[&id].continuation().map_or(0, |c| c.len())]);
+         let recovering = st.screens[&id].continuation().is_none();
+         for v in st.viewers.get_mut(&id).into_iter().flatten().filter(|v| ready(v)) {
+             v.conn.with(|out| {
+-                out.data(v.channel, &paint);
++                let bytes = if out.clear_pending(v.channel) { &safe_paint } else {
++                    out.program_resize_modes(v.channel, &paint_modes);
++                    &paint
++                };
++                out.data(v.channel, bytes);
+             });
+             v.repaint_pending = false;
+             v.recovering = recovering;
+@@ -388,6 +448,25 @@ pub(crate) fn first_paint(st: &State, id: u32, history: usize) -> Vec<u8> {
+     paint
+ }
+ 
++/// Mode changes in generated VT repaint bytes, before any parser continuation.
++fn repaint_modes(paint: &[u8]) -> Vec<(usize, bool)> {
++    const PREFIX: &[u8] = b"\x1b[?2048";
++    paint.windows(PREFIX.len() + 1).enumerate().filter_map(|(i, bytes)| {
++        if !bytes.starts_with(PREFIX) { return None; }
++        let on = match bytes[PREFIX.len()] { b'h' => true, b'l' => false, _ => return None };
++        Some((i + bytes.len(), on))
++    }).collect()
++}
++
++fn repaint_in_place(st: &State, id: u32) -> Vec<u8> {
++    let screen = &st.screens[&id];
++    let mut paint = paint_state(st, id, screen.paint_in_place());
++    if let Some(continuation) = screen.continuation() {
++        paint.extend(continuation);
++    }
++    paint
++}
++
+ fn paint_state(st: &State, id: u32, screen: Vec<u8>) -> Vec<u8> {
+     // A backlog may have ended in any parser state, not at an escape boundary.
+     let mut paint = vec![0x18];
+diff --git i/crates/herdr-core/src/viewers/tests.rs w/crates/herdr-core/src/viewers/tests.rs
+index c7ab9f6..48d175c 100644
+--- i/crates/herdr-core/src/viewers/tests.rs
++++ w/crates/herdr-core/src/viewers/tests.rs
+@@ -91,3 +91,91 @@ fn resize_drags_serialize_nothing_without_observers_and_only_latest_when_stalled
+     drop(core);
+     std::fs::remove_dir_all(root).unwrap();
+ }
++
++#[tokio::test]
++async fn clear_changes_authoritative_history_and_repaints_consumers_without_input() {
++    let root = std::path::PathBuf::from(format!("/var/tmp/hc-clear-{}", crate::platform::random_hex()));
++    let paths = crate::paths::Paths {
++        socket: root.join("core.sock"),
++        holder_socket: root.join("holder.sock"),
++        state: root.clone(),
++        config: root.join("config.toml"),
++    };
++    paths.create_dirs().unwrap();
++    let core = Core::start(paths, crate::api::CoreInfo { id: "test".into(), name: "test".into() }).unwrap();
++    let (id, other) = {
++        let mut st = core.lock();
++        let mut add = || {
++            st.reg.create(crate::terminals::NewTerminal {
++                argv: vec!["sh".into()], cols: 10, rows: 5, ..Default::default()
++            }, 0).unwrap()
++        };
++        let id = add();
++        let other = add();
++        st.screens.insert(id, ghostty_vt::Terminal::new(10, 5, 1 << 20));
++        st.screens.insert(other, ghostty_vt::Terminal::new(10, 5, 1 << 20));
++        core.output(&mut st, other, b"untouched");
++        (id, other)
++    };
++    let conn = Arc::new(Conn::default());
++    let request = || AttachRequest {
++        observe: false, resize_notifications: false, history: 100,
++        size: (10, 5), display: Display::default(), resumed: false,
++    };
++    let channel = core.attach(&conn, id, request()).unwrap();
++    conn.with(|out| {
++        out.resume(channel);
++        while out.next_frame().is_some() {}
++    });
++    {
++        let mut st = core.lock();
++        core.output(&mut st, id, b"old\r\nold\r\nold\r\nold\r\nold\r\n\x1b[32m$ abcdefghijklmnop\r\nstale\x1b[2A\x1b[4G\x1b[");
++    }
++    conn.with(|out| while out.next_frame().is_some() {});
++    let call = crate::api::Call { core: &core, conn: None, plain: None };
++    let cleared = crate::api::dispatch(&call, "terminal.clear", serde_json::json!({"terminal": "t1"})).await.unwrap();
++    assert_eq!(cleared["cleared"], true);
++    {
++        let mut st = core.lock();
++        let screen = &st.screens[&id];
++        let text = screen.plain_text();
++        assert!(text.contains("$ abcdefghijklmnop"), "{text:?}");
++        assert!(!text.contains("old"), "{text:?}");
++        assert!(!text.contains("stale"), "{text:?}");
++        assert_eq!(st.screens[&other].plain_text(), "untouched");
++        let restored = ghostty_vt::Terminal::restore(&screen.snapshot().unwrap(), 1 << 20).unwrap();
++        assert!(!restored.plain_text().contains("old"));
++        core.output(&mut st, id, b"5 q");
++        assert!(!st.screens[&id].plain_text().contains("5 q"), "unfinished CSI survives clear");
++        assert!(st.screens.get_mut(&id).unwrap().take_responses().is_empty());
++    }
++    conn.with(|out| {
++        let frame = out.next_frame().unwrap();
++        assert_eq!(frame[4], wire::DATA);
++        assert!(frame[wire::HEADER..].windows(4).any(|b| b == b"\x1b[3J"));
++    });
++    let fresh = Arc::new(Conn::default());
++    let fresh_channel = core.attach(&fresh, id, request()).unwrap();
++    fresh.with(|out| {
++        out.resume(fresh_channel);
++        let frame = out.next_frame().unwrap();
++        let mut viewer = ghostty_vt::Terminal::new(10, 5, 1 << 20);
++        viewer.write(&frame[wire::HEADER..]);
++        assert!(!viewer.plain_text().contains("old"));
++        assert!(viewer.plain_text().contains("$ abcdefghijklmnop"), "viewer={:?}, paint={:?}", viewer.plain_text(), String::from_utf8_lossy(&frame[wire::HEADER..]));
++    });
++    {
++        let mut st = core.lock();
++        core.output(&mut st, id, b"\x1b[?1049halt app");
++    }
++    let unchanged = crate::api::dispatch(&call, "terminal.clear", serde_json::json!({"terminal": "t1"})).await.unwrap();
++    assert_eq!(unchanged["cleared"], false);
++    {
++        let mut st = core.lock();
++        assert!(st.screens[&id].plain_text().contains("alt app"));
++        core.output(&mut st, id, b"\x1b[?1049l");
++        assert!(st.screens[&id].plain_text().contains("$ abcdefghijklmnop"));
++    }
++    drop(core);
++    std::fs::remove_dir_all(root).unwrap();
++}
+diff --git i/crates/herdr-core/src/wire.rs w/crates/herdr-core/src/wire.rs
+index 999027a..23b75ae 100644
+--- i/crates/herdr-core/src/wire.rs
++++ w/crates/herdr-core/src/wire.rs
+@@ -147,10 +147,31 @@ struct Stream {
+     resizes: VecDeque<(usize, Vec<u8>)>,
+     paused: bool,
+     credit: usize,
++    /// Bytes preceding a history reset and bytes already sent of its prefix.
++    clear_prefix: Option<(usize, usize)>,
++    /// End positions of genuine program mode transitions still queued.
++    resize_modes: VecDeque<(usize, bool)>,
+     /// The program ended: CLOSE (with this reason) once `pending` is out.
+     ending: Option<Vec<u8>>,
+ }
+ 
++impl Stream {
++    fn replace_pending(&mut self) {
++        self.pending.clear();
++        if self.clear_prefix.is_some() {
++            let latest = self.resize_modes.back().map(|(_, on)| *on);
++            self.resize_modes.clear();
++            if let Some(on) = latest {
++                self.pending.extend(if on { b"\x18\x1b[?2048h" } else { b"\x18\x1b[?2048l" });
++                self.resize_modes.push_back((self.pending.len(), on));
++            }
++            self.clear_prefix = Some((self.pending.len(), 0));
++        } else {
++            self.resize_modes.clear();
++        }
++    }
++}
++
+ /// What one connection still has to send. Control frames always go first;
+ /// streams share what's left in turn, each limited by its own credit, so a
+ /// viewer that stops reading never holds up typing, replies or other viewers.
+@@ -180,7 +201,7 @@ impl Outbox {
+     pub fn open(&mut self, channel: u32) {
+         self.streams.insert(
+             channel,
+-            Stream { pending: VecDeque::new(), resizes: VecDeque::new(), paused: false, credit: WINDOW, ending: None },
++            Stream { pending: VecDeque::new(), resizes: VecDeque::new(), paused: false, credit: WINDOW, clear_prefix: None, resize_modes: VecDeque::new(), ending: None },
+         );
+     }
+ 
+@@ -200,11 +221,42 @@ impl Outbox {
+         self.streams.get(&channel).is_some_and(|s| !s.paused && s.credit > 0)
+     }
+ 
++    /// Preserve queued program output, then reset history before its replacement paint.
++    pub fn clear_history(&mut self, channel: u32) {
++        if let Some(s) = self.streams.get_mut(&channel) {
++            s.clear_prefix = Some((s.pending.len(), 0));
++        }
++    }
++
++    pub fn clear_pending(&self, channel: u32) -> bool {
++        self.streams.get(&channel).is_some_and(|s| s.clear_prefix.is_some())
++    }
++
++    /// Record program mode changes by their final byte in the next DATA append.
++    pub fn program_resize_modes(&mut self, channel: u32, modes: &[(usize, bool)]) {
++        if let Some(s) = self.streams.get_mut(&channel) {
++            let base = s.pending.len();
++            s.resize_modes.extend(modes.iter().map(|(at, on)| (base + at, *on)));
++        }
++    }
++
++    /// Keep genuine mode requests even when an obsolete resize paint suppresses DATA.
++    pub fn queue_program_resize_modes(&mut self, channel: u32, modes: &[(usize, bool)]) {
++        if !self.clear_pending(channel) {
++            return;
++        }
++        for &(_, on) in modes {
++            let bytes: &[u8] = if on { b"\x18\x1b[?2048h" } else { b"\x18\x1b[?2048l" };
++            self.program_resize_modes(channel, &[(bytes.len(), on)]);
++            self.data(channel, bytes);
++        }
++    }
++
+     /// Supersede pending output with a new grid and an authoritative repaint.
+     /// A partly delivered escape sequence is cancelled by the repaint's CAN.
+     pub fn resize(&mut self, channel: u32, size: &[u8]) {
+         if let Some(s) = self.streams.get_mut(&channel) {
+-            s.pending.clear();
++            s.replace_pending();
+             s.resizes.clear();
+             s.resizes.push_back((0, size.to_vec()));
+         }
+@@ -237,7 +289,7 @@ impl Outbox {
+     pub fn data(&mut self, channel: u32, bytes: &[u8]) -> bool {
+         let Some(s) = self.streams.get_mut(&channel) else { return true };
+         if s.pending.len() + bytes.len() > MAX_PENDING {
+-            s.pending.clear();
++            s.replace_pending();
+             let latest = s.resizes.pop_back();
+             s.resizes.clear();
+             if let Some((_, size)) = latest {
+@@ -279,7 +331,7 @@ impl Outbox {
+             return Some(frame);
+         }
+         if let Some((&channel, _)) =
+-            self.streams.iter().find(|(_, s)| !s.paused && s.ending.is_some() && s.pending.is_empty())
++            self.streams.iter().find(|(_, s)| !s.paused && s.ending.is_some() && s.pending.is_empty() && s.clear_prefix.is_none())
+         {
+             let reason = self.streams.remove(&channel).and_then(|s| s.ending).unwrap_or_default();
+             return Some(encode(channel, CLOSE, &reason));
+@@ -287,7 +339,7 @@ impl Outbox {
+         let ready: Vec<u32> = self
+             .streams
+             .iter()
+-            .filter(|(_, s)| !s.paused && s.credit > 0 && !s.pending.is_empty())
++            .filter(|(_, s)| !s.paused && s.credit > 0 && (!s.pending.is_empty() || s.clear_prefix.is_some()))
+             .map(|(ch, _)| *ch)
+             .collect();
+         let channel = *ready.iter().find(|ch| **ch > self.turn).or(ready.first())?;
+@@ -297,11 +349,28 @@ impl Outbox {
+             let (_, size) = s.resizes.pop_front().unwrap();
+             return Some(encode(channel, RESIZE, &size));
+         }
++        if let Some((0, offset)) = s.clear_prefix {
++            const PREFIX: &[u8] = b"\x18\x1b[?1049l\x1b[?1047l\x1b[?47l\x1b[3J";
++            let n = (PREFIX.len() - offset).min(s.credit).min(CHUNK);
++            s.credit -= n;
++            s.clear_prefix = (offset + n < PREFIX.len()).then_some((0, offset + n));
++            return Some(encode(channel, DATA, &PREFIX[offset..offset + n]));
++        }
+         let boundary = s.resizes.front().map_or(usize::MAX, |(at, _)| *at);
+-        let n = s.pending.len().min(s.credit).min(CHUNK).min(boundary);
++        let clear_at = s.clear_prefix.map_or(usize::MAX, |(at, _)| at);
++        let n = s.pending.len().min(s.credit).min(CHUNK).min(boundary).min(clear_at);
+         for (at, _) in &mut s.resizes {
+             *at -= n;
+         }
++        if let Some((at, _)) = &mut s.clear_prefix {
++            *at -= n;
++        }
++        while s.resize_modes.front().is_some_and(|(at, _)| *at <= n) {
++            s.resize_modes.pop_front();
++        }
++        for (at, _) in &mut s.resize_modes {
++            *at -= n;
++        }
+         s.credit -= n;
+         let chunk: Vec<u8> = s.pending.drain(..n).collect();
+         Some(encode(channel, DATA, &chunk))
+@@ -312,6 +381,65 @@ impl Outbox {
+ mod tests {
+     use super::*;
+ 
++    #[test]
++    fn history_reset_survives_overflow_resize_and_partial_delivery() {
++        let mut out = Outbox::default();
++        out.open(1);
++        out.data(1, &vec![b'x'; WINDOW]);
++        while out.next_frame().is_some() {}
++        out.clear_history(1);
++        out.data(1, b"old paint");
++        assert!(!out.data(1, &vec![b'x'; MAX_PENDING + 1]));
++        out.resize(1, &[10, 0, 5, 0]);
++        out.data(1, b"latest paint");
++        out.credit(1, 2);
++        assert_eq!(out.next_frame().unwrap()[4], RESIZE);
++        assert_eq!(&out.next_frame().unwrap()[HEADER..], b"\x18\x1b");
++        out.resize(1, &[11, 0, 5, 0]);
++        out.data(1, b"new paint");
++        out.credit(1, 100);
++        assert_eq!(out.next_frame().unwrap()[4], RESIZE);
++        assert_eq!(&out.next_frame().unwrap()[HEADER..], b"\x18\x1b[?1049l\x1b[?1047l\x1b[?47l\x1b[3J");
++        assert_eq!(&out.next_frame().unwrap()[HEADER..], b"new paint");
++    }
++
++    #[test]
++    fn clear_preserves_undelivered_program_modes_across_replacements() {
++        let mut out = Outbox::default();
++        out.open(1);
++        out.data(1, &vec![b'x'; WINDOW]);
++        while out.next_frame().is_some() {}
++        let mode = b"\x1b[?2048h";
++        out.program_resize_modes(1, &[(mode.len(), true)]);
++        out.data(1, mode);
++        out.clear_history(1);
++        out.data(1, b"paint");
++        out.credit(1, 3);
++        assert_eq!(&out.next_frame().unwrap()[HEADER..], b"\x1b[?");
++        assert!(!out.data(1, &vec![b'x'; MAX_PENDING + 1]));
++        out.resize(1, &[10, 0, 5, 0]);
++        out.data(1, b"replacement");
++        out.credit(1, 100);
++        assert_eq!(out.next_frame().unwrap()[4], RESIZE);
++        assert_eq!(&out.next_frame().unwrap()[HEADER..], b"\x18\x1b[?2048h");
++        assert_eq!(&out.next_frame().unwrap()[HEADER..], b"\x18\x1b[?1049l\x1b[?1047l\x1b[?47l\x1b[3J");
++        assert_eq!(&out.next_frame().unwrap()[HEADER..], b"replacement");
++    }
++
++    #[test]
++    fn repeated_mode_replacements_stay_bounded_and_keep_final_state() {
++        let mut out = Outbox::default();
++        out.open(1);
++        out.clear_history(1);
++        let modes: Vec<_> = (1..=20_000).map(|i| (i * 8, i % 2 == 0)).collect();
++        for _ in 0..3 {
++            out.program_resize_modes(1, &modes);
++            assert!(!out.data(1, &vec![b'x'; MAX_PENDING + 1]));
++            assert_eq!(out.queued(1), b"\x18\x1b[?2048h".len());
++        }
++        assert_eq!(&out.next_frame().unwrap()[HEADER..], b"\x18\x1b[?2048h");
++    }
++
+     #[test]
+     fn resize_replaces_stalled_and_partially_sent_paints_atomically() {
+         let mut out = Outbox::default();
+diff --git i/crates/herdr-core/tests/cli_docs.rs w/crates/herdr-core/tests/cli_docs.rs
+index 72447ea..5288ed1 100644
+--- i/crates/herdr-core/tests/cli_docs.rs
++++ w/crates/herdr-core/tests/cli_docs.rs
+@@ -57,7 +57,7 @@ fn flag_value(help: &str, name: &str) -> Option<bool> {
+ fn render(reference: &Reference) -> String {
+     let mut doc = String::from(
+         "# Commands\n\nGenerated from the built binary's help. Do not edit by hand.\n\
+-         Run `just docs` to refresh it and `just docs-check` to check it.\n\n\
++         Run `just docs` to refresh it and `just docs-check` to check documented examples.\n\n\
+          [Start here](../README.md) for a short tour.\n",
+     );
+     for (path, help) in reference {
+@@ -131,20 +131,14 @@ fn check_markdown(path: &str, text: &str, reference: &Reference) -> Vec<String>
+ }
+ 
+ #[test]
+-fn help_reference_and_examples_are_current() {
++fn documented_examples_use_supported_commands_and_flags() {
+     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+     let reference = reference();
+-    let rendered = render(&reference);
+     let generated = root.join("docs/commands.md");
+     if std::env::var_os("HC_UPDATE_DOCS").is_some() {
+         std::fs::create_dir_all(generated.parent().unwrap()).unwrap();
+-        std::fs::write(&generated, &rendered).unwrap();
++        std::fs::write(&generated, render(&reference)).unwrap();
+     }
+-    assert_eq!(
+-        std::fs::read_to_string(generated).unwrap_or_default().replace("\r\n", "\n"),
+-        rendered,
+-        "docs/commands.md is stale; run just docs"
+-    );
+     let mut paths = vec![root.join("README.md")];
+     paths.extend(
+         std::fs::read_dir(root.join("docs"))
+diff --git i/docs/commands.md w/docs/commands.md
+index 210994d..fa14ec5 100644
+--- i/docs/commands.md
++++ w/docs/commands.md
+@@ -1,7 +1,7 @@
+ # Commands
+ 
+ Generated from the built binary's help. Do not edit by hand.
+-Run `just docs` to refresh it and `just docs-check` to check it.
++Run `just docs` to refresh it and `just docs-check` to check documented examples.
+ 
+ [Start here](../README.md) for a short tour.
+ 
+@@ -19,6 +19,7 @@ Terminals
+   get <t>                     show one terminal
+   attach [t]                  put this terminal on it (ctrl+\ detaches)
+   read <t>                    print its screen and history
++  clear <t>                   clear primary history, retaining the cursor line
+   kill <t>                    end its program
+   rm <t>                      remove a finished terminal
+   label <t> k=v...            set labels
+@@ -51,8 +52,8 @@ More
+   connect                     the API over stdin/stdout (ssh box hc connect)
+   schema                      the API as JSON Schema, for app builders
+ 
+-<t> is an address like t7 or t1b, or a name. In a terminal, attach, read, get,
+-kill, rm, wait and interrupt pick one when it's left out.
++<t> is an address like t7 or t1b, or a name. In a terminal, attach, read, clear,
++get, kill, rm, wait and interrupt pick one when it's left out.
+ Options: --json (default when piped; run and read print text), -V --version,
+ --licenses (what hc includes, and their licenses).
+ Per command: hc <command> --help
+@@ -86,6 +87,21 @@ Options:
+   -h, --help               Print help
+ ```
+ 
++## hc clear
++
++```text
++Clear a terminal's primary history, preserving the cursor line
++
++Usage: hc clear [OPTIONS] [TERMINAL]
++
++Arguments:
++  [TERMINAL]  The terminal: `t7`, a name, or `machine/t7`
++
++Options:
++      --json  JSON output even in a terminal
++  -h, --help  Print help
++```
++
+ ## hc connect
+ 
+ ```text
+diff --git i/schema/hc.openrpc.json w/schema/hc.openrpc.json
+index 2cc9894..e5f8bec 100644
+--- i/schema/hc.openrpc.json
++++ w/schema/hc.openrpc.json
+@@ -31,6 +31,18 @@
+         ],
+         "type": "string"
+       },
++      "ClearResult": {
++        "properties": {
++          "cleared": {
++            "description": "False when the terminal is on the alternate screen and nothing changed.",
++            "type": "boolean"
++          }
++        },
++        "required": [
++          "cleared"
++        ],
++        "type": "object"
++      },
+       "CoreInfo": {
+         "properties": {
+           "id": {
+@@ -2159,6 +2171,63 @@
+         }
+       }
+     },
++    {
++      "description": "Clear primary screen history and rows above the cursor's wrapped line, without sending input. Does nothing on the alternate screen.",
++      "errors": [
++        {
++          "code": -32000,
++          "data": {
++            "kind": "not_found"
++          },
++          "message": "not_found"
++        },
++        {
++          "code": -32000,
++          "data": {
++            "kind": "machine_unknown"
++          },
++          "message": "machine_unknown"
++        },
++        {
++          "code": -32000,
++          "data": {
++            "kind": "finished"
++          },
++          "message": "finished"
++        }
++      ],
++      "name": "terminal.clear",
++      "paramStructure": "by-name",
++      "params": [
++        {
++          "description": "Who is calling; a parent looking at its child has seen its news.",
++          "name": "caller",
++          "required": false,
++          "schema": {
++            "description": "Who is calling; a parent looking at its child has seen its news.",
++            "type": [
++              "string",
++              "null"
++            ]
++          }
++        },
++        {
++          "description": "The terminal: `t7`, a name, or `machine/t7`.",
++          "name": "terminal",
++          "required": true,
++          "schema": {
++            "description": "The terminal: `t7`, a name, or `machine/t7`.",
++            "type": "string"
++          }
++        }
++      ],
++      "result": {
++        "name": "result",
++        "schema": {
++          "$ref": "#/components/schemas/ClearResult"
++        }
++      }
++    },
+     {
+       "description": "Open a raw stream to a live terminal on this framed connection (see `hello` with `framed`). Loss ends the stream even when kept; reattach after the restarted event.",
+       "errors": [

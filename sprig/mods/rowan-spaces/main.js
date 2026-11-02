@@ -165,6 +165,19 @@ export default class Spaces extends View {
   command(c, cx) {
     const h = this.herd(), all = this.state.herds, at = all.indexOf(h);
     if (c === "prefix-cancel") return;
+    const worktree = /^worktree-(new|open|remove)(?::(.+))?$/.exec(c);
+    if (worktree) {
+      let target = focused()?.space;
+      if (worktree[2]) { try { target = decodeURIComponent(worktree[2]); } catch { return; } }
+      const current = spaces().find(s => s.id === target && h.members.includes(this.machineKey(s.machine)));
+      if (!current || !machines().some(m => m.name === current.machine && m.layout === "ready")) return;
+      const action = worktree[1];
+      const folder = (focused()?.space === current.id && focused()?.cwd) || place(current, panes());
+      openOverlay({mod: "square-dracula-worktree", kind: "dialog", frame: "none",
+        ...(action === "open" ? {width: 560, height: 480} : {width: 460, height: 280}),
+        props: {space: current.id, machine: current.machine, folder, action}});
+      return;
+    }
     if (c === "focus") {
       this.cursor = focused()?.space;
       this.handle.focus();
@@ -699,7 +712,7 @@ export default class Spaces extends View {
     const h = this.herd(), scoped = sp.filter(s => h.members.includes(this.machineKey(s.machine)));
     const current = scoped.find(s => s.id === focused()?.space);
     const selectedReady = Boolean(current && machines().some(m => m.name === current.machine && m.layout === "ready"));
-    const scope = {herd: h.id, machineKeys: h.members.map(key => this.machineName(key) ?? "@local"), spaceIds: scoped.map(s => s.id), labels: Object.fromEntries(scoped.map(s => [s.id, this.label(s)])), selectedReady, empty: scoped.length === 0};
+    const scope = {herd: h.id, machineKeys: h.members.map(key => this.machineName(key) ?? "@local"), spaceIds: scoped.map(s => s.id), orderedIds: this.ordered().map(r => r.w.id), labels: Object.fromEntries(scoped.map(s => [s.id, this.label(s)])), selectedReady, empty: scoped.length === 0};
     const surface = selectedReady ? "rowan-workspace" : "rowan-empty";
     if (surface !== this.surfaceDesired) {
       this.surfaceDesired = surface;
@@ -720,7 +733,8 @@ export default class Spaces extends View {
     const bindings = keys().filter(k => k.section === "global" || k.section === "terminal" ||
       (layoutName && k.section === `layout:${layoutName}`));
     const priority = s => s === "terminal" ? 2 : s.startsWith("layout:") ? 1 : 0;
-    const help = bindings.find(k => k.action === "app.help" &&
+    const legacyHelp = bindings.some(k => k.action === "mod.open:rowan-help");
+    const help = bindings.find(k => k.action === (legacyHelp ? "mod.open:rowan-help" : "app.help") &&
       !bindings.some(other => other.keys === k.keys && priority(other.section) > priority(k.section)));
     const helpHint = help ? `Keybinds (${help.keys})` : "Keybinds";
     return v_flex().size_full().min_h(0).pt(12).bg(t.chrome).text_size(this.metrics.fontSize).child(tabs)
@@ -731,7 +745,7 @@ export default class Spaces extends View {
         .when(h.members.length === 0, e => e.child(div().id("empty-herd").px(12).py(8).text_color(t.dim).child("Empty herd — move a machine here from its heading menu.")))
         .children(this.grouped(t, compact, rows)))
       .child(h_flex().id("sidebar-help").h(this.metrics.rowHeight + 4).flex_none().items_center().justify_center()
-        .child(ratioControl("sidebar-help-button", compact ? "?" : "Keys", helpHint, () => run("app.help"))))
+        .child(ratioControl("sidebar-help-button", compact ? "?" : "Keys", helpHint, () => legacyHelp ? run("mod.open", {name: "rowan-help"}) : run("app.help"))))
       .when(!compact, e => e.child(h_flex().id("sidebar-font-controls").px(14)
         .h(this.metrics.rowHeight + 4).flex_none().gap(3).items_center().justify_center()
         .child(ratioControl("sidebar-font-smaller", "−", "Smaller sidebar text", () => this.command("font-smaller")))

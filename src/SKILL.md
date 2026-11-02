@@ -31,8 +31,13 @@ timer. The window shows PREFIX while it is pending. Configured app chords with a
 effective Escape continuation remain armed until completion/cancellation; ordinary
 chords retain GPUI's timeout. OS deactivation clears the chord without moving focus.
 `status.layout_name` and `herdr.window().layout_name` identify the active key layout.
-`app.help` opens a searchable guide with terminal/layout/global precedence and
-explicit mod-only scopes; the person's configured help shortcut may differ.
+`app.help` opens the key guide (the legacy guide under `rowan-terminal`);
+the person's configured help shortcut may differ.
+Legacy panes support `pane.rename`, `pane.cycle`, `pane.last`, `pane.resize`,
+and `pane.resize_mode`; `terminal.copy_mode`, `terminal.clear`, and
+`terminal.edit_scrollback` act on the focused terminal. `app.reload` explicitly
+reloads configuration. `agent.select` and `notification.open_target` navigate
+to an indexed agent or a visible notification target.
 Do not stop, signal or restart the person's app or core without authorization.
 
 `app.check_updates` checks for newer releases. Settings reports "Up to date"

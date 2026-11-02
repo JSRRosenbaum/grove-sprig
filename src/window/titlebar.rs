@@ -85,6 +85,8 @@ impl AppWindow {
             "fullscreen": window.is_fullscreen(),
             "active": self.window_active,
             "layout_name": self.layout_name,
+            "selected_machine": self.selected_machine.as_deref().filter(|m| !m.is_empty())
+                .or_else(|| if self.selected_machine.is_none() { self.model.active_space().and_then(|s| s.machine.as_deref()) } else { None }),
             "pending_keys": crate::keys::pending_keys(window),
         })
     }

@@ -1,0 +1,233 @@
+diff --git i/include/ghostty/vt/terminal.h w/include/ghostty/vt/terminal.h
+index 482b970..027beed 100644
+--- i/include/ghostty/vt/terminal.h
++++ w/include/ghostty/vt/terminal.h
+@@ -3016,6 +3016,28 @@ GHOSTTY_API void ghostty_terminal_free(GhosttyTerminal terminal);
+  */
+ GHOSTTY_API void ghostty_terminal_reset(GhosttyTerminal terminal);
+ 
++/**
++ * Clear primary history and all rows outside the cursor's visible soft-wrapped
++ * line without modifying parser state or writing input. Returns false without
++ * changing an alternate screen or a NULL terminal.
++ * @ingroup terminal
++ */
++GHOSTTY_API bool ghostty_terminal_clear_primary(GhosttyTerminal terminal);
++
++/**
++ * Return the current cursor appearance as a DECSCUSR value (1 through 6),
++ * or zero for a NULL terminal. A hollow block is represented as a block.
++ * @ingroup terminal
++ */
++GHOSTTY_API uint8_t ghostty_terminal_cursor_shape(GhosttyTerminal terminal);
++
++/**
++ * Copy the 256-bit OSC palette override mask into 32 bytes, least-significant
++ * bit first. Returns false for a NULL terminal or output buffer.
++ * @ingroup terminal
++ */
++GHOSTTY_API bool ghostty_terminal_palette_override_mask(GhosttyTerminal terminal, uint8_t out[32]);
++
+ /**
+  * Resize the terminal to the given dimensions.
+  *
+diff --git i/src/lib_vt.zig w/src/lib_vt.zig
+index 517ccce..06f775f 100644
+--- i/src/lib_vt.zig
++++ w/src/lib_vt.zig
+@@ -321,6 +321,9 @@ comptime {
+         @export(&c.terminal_new, .{ .name = "ghostty_terminal_new" });
+         @export(&c.terminal_free, .{ .name = "ghostty_terminal_free" });
+         @export(&c.terminal_reset, .{ .name = "ghostty_terminal_reset" });
++        @export(&c.terminal_clear_primary, .{ .name = "ghostty_terminal_clear_primary" });
++        @export(&c.terminal_cursor_shape, .{ .name = "ghostty_terminal_cursor_shape" });
++        @export(&c.terminal_palette_override_mask, .{ .name = "ghostty_terminal_palette_override_mask" });
+         @export(&c.terminal_resize, .{ .name = "ghostty_terminal_resize" });
+         @export(&c.terminal_set, .{ .name = "ghostty_terminal_set" });
+         @export(&c.terminal_vt_write, .{ .name = "ghostty_terminal_vt_write" });
+diff --git i/src/terminal/c/main.zig w/src/terminal/c/main.zig
+index 5248c2c..4c67117 100644
+--- i/src/terminal/c/main.zig
++++ w/src/terminal/c/main.zig
+@@ -184,6 +184,9 @@ pub const sys_set = sys.set;
+ pub const terminal_new = terminal.new;
+ pub const terminal_free = terminal.free;
+ pub const terminal_reset = terminal.reset;
++pub const terminal_clear_primary = terminal.clear_primary;
++pub const terminal_cursor_shape = terminal.cursor_shape;
++pub const terminal_palette_override_mask = terminal.palette_override_mask;
+ pub const terminal_resize = terminal.resize;
+ pub const terminal_set = terminal.set;
+ pub const terminal_vt_write = terminal.vt_write;
+diff --git i/src/terminal/c/terminal.zig w/src/terminal/c/terminal.zig
+index 06cab9b..2282b50 100644
+--- i/src/terminal/c/terminal.zig
++++ w/src/terminal/c/terminal.zig
+@@ -1754,6 +1754,64 @@ pub fn reset(terminal_: Terminal) callconv(lib.calling_conv) void {
+     if (sync) Effects.renderHoldTrampoline(&wrapper.stream.handler, false);
+ }
+ 
++/// Clear primary history and rows above the cursor's visible wrapped line.
++/// This does not pass bytes through the VT stream or write to the child.
++pub fn clear_primary(terminal_: Terminal) callconv(lib.calling_conv) bool {
++    const wrapper = terminal_ orelse return false;
++    const t = wrapper.terminal;
++    if (t.screens.active_key == .alternate) return false;
++    const screen = t.screens.active;
++    var first = screen.cursor.y;
++    var pin = screen.cursor.page_pin.*;
++    while (first > 0 and pin.rowAndCell().row.wrap_continuation) {
++        pin = pin.up(1) orelse break;
++        first -= 1;
++    }
++    var last = screen.cursor.y;
++    pin = screen.cursor.page_pin.*;
++    while (last + 1 < t.rows and pin.rowAndCell().row.wrap) {
++        pin = pin.down(1) orelse break;
++        last += 1;
++    }
++    if (last + 1 < t.rows) {
++        screen.clearRows(.{ .active = .{ .y = last + 1 } }, null, false);
++    }
++    screen.clearSelection();
++    t.eraseDisplay(.scrollback, false);
++    if (first > 0) screen.eraseActive(first - 1);
++    screen.scroll(.active);
++    t.flags.dirty.clear = true;
++    return true;
++}
++
++/// DECSCUSR representation of the current cursor appearance.
++pub fn cursor_shape(terminal_: Terminal) callconv(lib.calling_conv) u8 {
++    const wrapper = terminal_ orelse return 0;
++    const t = wrapper.terminal;
++    const base: u8 = switch (t.screens.active.cursor.cursor_style) {
++        .block, .block_hollow => 1,
++        .underline => 3,
++        .bar => 5,
++    };
++    return base + @as(u8, if (t.modes.get(.cursor_blinking)) 0 else 1);
++}
++
++/// Copy the 256-bit OSC palette override mask to the caller.
++pub fn palette_override_mask(terminal_: Terminal, out_: ?[*]u8) callconv(lib.calling_conv) bool {
++    const wrapper = terminal_ orelse return false;
++    const out = out_ orelse return false;
++    for (0..32) |byte| {
++        var bits: u8 = 0;
++        for (0..8) |bit| {
++            if (wrapper.terminal.colors.palette.mask.isSet(byte * 8 + bit)) {
++                bits |= @as(u8, 1) << @intCast(bit);
++            }
++        }
++        out[byte] = bits;
++    }
++    return true;
++}
++
+ /// C: GhosttyKittyGraphics
+ pub const KittyGraphics = kitty_gfx_c.KittyGraphics;
+ 
+diff --git i/src/terminal/formatter.zig w/src/terminal/formatter.zig
+index 9dd28a0..8541ec2 100644
+--- i/src/terminal/formatter.zig
++++ w/src/terminal/formatter.zig
+@@ -20,6 +20,16 @@ const Row = @import("page.zig").Row;
+ const Selection = @import("Selection.zig");
+ const Style = @import("style.zig").Style;
+ 
++fn writeOscField(writer: *std.Io.Writer, value: []const u8, parameter: bool) std.Io.Writer.Error!void {
++    for (value) |byte| {
++        if (byte < 0x20 or byte == 0x7f or (parameter and (byte == ';' or byte == ':'))) {
++            try writer.print("%{x:0>2}", .{byte});
++        } else {
++            try writer.writeByte(byte);
++        }
++    }
++}
++
+ /// Formats available.
+ pub const Format = lib.Enum(lib.target, &.{
+     // Plain text.
+@@ -771,17 +781,17 @@ pub const ScreenFormatter = struct {
+         if (self.extra.hyperlink) {
+             const cursor = &self.screen.cursor;
+             if (cursor.hyperlink) |link| {
+-                // Start hyperlink with uri (and explicit id if present)
++                try writer.writeAll("\x1b]8;");
+                 switch (link.id) {
+-                    .explicit => |id| try writer.print(
+-                        "\x1b]8;id={s};{s}\x1b\\",
+-                        .{ id, link.uri },
+-                    ),
+-                    .implicit => try writer.print(
+-                        "\x1b]8;;{s}\x1b\\",
+-                        .{link.uri},
+-                    ),
++                    .explicit => |id| {
++                        try writer.writeAll("id=");
++                        try writeOscField(writer, id, true);
++                    },
++                    .implicit => {},
+                 }
++                try writer.writeByte(';');
++                try writeOscField(writer, link.uri, false);
++                try writer.writeAll("\x1b\\");
+             }
+         }
+ 
+@@ -1470,10 +1480,8 @@ pub const PageFormatter = struct {
+ 
+                 // Hyperlink state
+                 hyperlink: {
+-                    // We currently only emit hyperlinks for HTML. In the
+-                    // future we can support emitting OSC 8 hyperlinks for
+-                    // VT output as well.
+-                    if (comptime emit != .html) break :hyperlink;
++                    // Plain text has no hyperlink representation.
++                    if (comptime emit == .plain) break :hyperlink;
+ 
+                     // Get the hyperlink ID. This ID is our internal ID,
+                     // not necessarily the OSC8 ID.
+@@ -1569,7 +1577,7 @@ pub const PageFormatter = struct {
+         // If the style is non-default, we need to close our style tag.
+         if (!style.default()) try self.formatStyleClose(emit, writer);
+ 
+-        // Close any open hyperlink for HTML output
++        // Close any open hyperlink before leaving this page.
+         if (current_hyperlink_id != null) try self.formatHyperlinkClose(emit, writer);
+ 
+         // Close the monospace wrapper for HTML output
+@@ -1693,7 +1701,7 @@ pub const PageFormatter = struct {
+             // cell must belong to the currently open hyperlink (or none).
+             // Transitions take the slow path. This is checked after blank
+             // accounting because blank cells never touch hyperlink state.
+-            if (comptime emit == .html) {
++            if (comptime emit != .plain) {
+                 if (cell.hyperlink) {
+                     const run_id = run_hyperlink_id orelse break;
+                     const cell_id = self.page.lookupHyperlink(cell) orelse break;
+@@ -2094,7 +2102,12 @@ pub const PageFormatter = struct {
+         uri: []const u8,
+     ) std.Io.Writer.Error!void {
+         switch (emit) {
+-            .plain, .vt => unreachable,
++            .plain => unreachable,
++            .vt => {
++                try writer.writeAll("\x1b]8;;");
++                try writeOscField(writer, uri, false);
++                try writer.writeAll("\x1b\\");
++            },
+ 
+             // layout since we're primarily using it as a CSS wrapper.
+             .html => {
+@@ -2116,7 +2129,8 @@ pub const PageFormatter = struct {
+     ) std.Io.Writer.Error!void {
+         const str: []const u8 = switch (emit) {
+             .html => "</a>",
+-            .plain, .vt => return,
++            .vt => "\x1b]8;;\x1b\\",
++            .plain => return,
+         };
+ 
+         try writer.writeAll(str);

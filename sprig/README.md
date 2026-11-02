@@ -15,28 +15,51 @@ for installed-state compatibility; a second fork checkout is no longer needed.
 
 - Herdr and herdr-core installed and working. Built from Herdr 0.1.7's shipped layouts
   and mods.
+- Python 3.11 or newer for the installer and its TOML configuration reader.
 - Git, used by the Files, Changes, Spaces, and worktree panels.
 - Fira Code for the intended terminal and interface typography. It is not bundled; Herdr uses
   its available fallback fonts when it is missing.
 
-The layout carries its own Dracula colors, fonts, and terminal padding. Installing it does
-not require replacing your global settings or keybindings.
+The layout carries its own Dracula colors, fonts, and terminal padding. The
+legacy profile deliberately replaces global and terminal key scopes; the
+previous `keys.json` is backed up for restoration.
 
 ## Install
 
 From the **Sprig repository root**:
 
 ```sh
-python3 sprig/install.py
+python3 sprig/install.py --legacy-config /path/to/original/herdr/config.toml
 herdr-app do layout.switch --name rowan-terminal
 ```
 
 See the [root installation guide](../README.md#install-or-update-sprig-customizations)
 for alternate configuration roots, backups and the update/rollback contract.
-The installer includes all eleven mods used by `rowan-terminal`; it does not
-overwrite global settings or install the author's personal snapshots in
-`settings.json` / `keys.json`. It preserves existing global and terminal keys
-and seeds platform defaults when `keys.json` is missing.
+The installer compiles the original Herdr defaults and your TOML overrides into
+the Rowan legacy profile. If `--legacy-config` is omitted, it discovers a local
+Herdr config only when the location is unambiguous; without one, original
+defaults are used. The selected file remains on your machine. It replaces the
+Rowan layout, global, terminal, and Rowan Navigate key scopes to avoid newer
+shortcuts intercepting keys intended for terminal programs. Other key sections,
+settings, credentials, and state are preserved. Unsupported commands and
+missing local absolute command dependencies stop installation before changes.
+For remote source machines, pass `--legacy-machine-config NAME=PATH` once per
+machine, using its exact core machine profile name and a local copy of that
+machine's original TOML. By default, normal shortcuts and prefix come from the
+frontend configuration; custom commands come from the focused source machine.
+An unconfigured remote machine retains frontend normal keys but has no custom
+commands. Use `--legacy-key-source server` to select each source machine's full
+key profile instead. Remote command dependencies are checked on the source
+machine when invoked, not against the frontend's filesystem. Source TOML paths
+are not written into the installed profile.
+
+Annotation capture and management require the native runtime on the source
+machine. Build `sprig/plugin_runtimes/annotate` with Rust 1.96 and install
+`herdr-annotate` to `$XDG_DATA_HOME/sprig/bin` (default `~/.local/share/sprig/bin`),
+or `herdr-annotate.exe` to `%LOCALAPPDATA%\sprig\bin` on Windows. Alternatively,
+set `SPRIG_ANNOTATE_BIN` to its full path in that machine's environment.
+The runtime does not require a legacy Herdr installation; the existing
+annotation JSONL store remains under the legacy plugin state directory.
 
 The original Square Dracula layout and assets remain in this directory as
 attributed source, but the supported installer installs the compact Rowan layout
@@ -84,7 +107,7 @@ Joseph's Herdr TUI fork without changing the terminal renderer or moving any pro
 It uses `rowan-spaces`, `rowan-agents`, `rowan-empty`, and the herd-scoped `rowan-picker`.
 
 ```sh
-python3 sprig/install.py
+python3 sprig/install.py --legacy-config /path/to/original/herdr/config.toml
 herdr-app check ~/.config/herdr-app/mods/rowan-spaces
 herdr-app check ~/.config/herdr-app/mods/rowan-agents
 herdr-app check ~/.config/herdr-app/mods/rowan-empty
@@ -93,10 +116,13 @@ herdr-app do layout.switch --name rowan-terminal
 ```
 
 The installer updates its owned Square Dracula dependencies, Rowan mods/theme/layout,
-and OMP display companion. It merges the Rowan layout's key section while preserving
-unrelated bindings, terminal overrides, settings, zoom, and machine configuration.
-Existing files are backed up under `~/.local/state/herdr-app/rowan-sidebar-backup-*`;
-each `manifest.json` maps destination paths to their original numbered copies.
+legacy plugin helper, and OMP display companion. The legacy profile replaces the
+Rowan, global, terminal, and Navigate key sections; unrelated key sections,
+settings, zoom, and machine configuration remain unchanged. Existing files,
+including the complete previous `keys.json`, are backed up under
+`~/.local/state/herdr-app/rowan-sidebar-backup-*`; each `manifest.json` maps
+destination paths to their original numbered copies. To restore previous keys,
+copy the saved `keys.json` identified in that manifest back to the app home.
 Use `--app-home` / `--agent-home` for explicit alternate installation roots.
 
 - Numbered herd tabs retain empty herds. `+` adds one. Right-click a machine heading
@@ -136,9 +162,8 @@ Use `--app-home` / `--agent-home` for explicit alternate installation roots.
 - `w1`, `w2`, … are persistent **display aliases**, not core/API workspace IDs.
   They remain bound to the full machine-profile/space identity across row reordering,
   reload, and profile rename. Separate profiles on one host are not merged.
-- Ctrl+Alt+Up/Down cycles workspaces in the selected herd; Ctrl+Alt+Left/Right switches
-  herds and restores the remembered live space/tab/pane. Alt+Up/Down cycles that
-  herd's agents; Alt+1…9 selects a tab in the active workspace.
+- Workspace, herd, tab, and agent shortcuts follow the selected legacy TOML
+  configuration (or original defaults when no config is found).
 - Empty/unavailable selections show a non-terminal surface. The Rowan layout guards
   implicit create/rename, tab, pane, and paste shortcuts from acting on an off-herd
   workspace. Explicit external core commands remain independent of this UI.

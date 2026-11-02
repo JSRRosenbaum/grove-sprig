@@ -253,6 +253,8 @@ export function window(): {
   active: boolean;
   /** Name of the layout currently shown in this window. */
   layout_name: string;
+  /** Selected source machine, including an empty endpoint; null means this computer. */
+  selected_machine: string | null;
   /** GPUI's currently pending chord, in canonical keystroke notation. */
   pending_keys: string[];
 } | null;

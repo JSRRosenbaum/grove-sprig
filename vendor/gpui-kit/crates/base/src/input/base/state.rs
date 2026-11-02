@@ -106,6 +106,14 @@ actions!(
         Copy,
         Cut,
         Paste,
+        LegacyKillStart,
+        LegacyKillEnd,
+        LegacyKillPreviousWord,
+        LegacyKillNextWord,
+        LegacyYank,
+        LegacyPreviousWord,
+        LegacyNextWord,
+        LegacyClearRename,
         Undo,
         Redo,
         MoveToStartOfLine,
@@ -134,6 +142,32 @@ pub enum InputEvent {
 }
 
 pub(super) const CONTEXT: &str = "Input";
+// Legacy Herdr groups whitespace, word characters and punctuation into runs.
+fn legacy_word_boundary(text: &str, cursor: usize, backward: bool) -> usize {
+    let class = |g: &str| {
+        let ch = g.chars().next().unwrap_or(' ');
+        if ch.is_whitespace() { 0 } else if ch.is_alphanumeric() || ch == '_' { 1 } else { 2 }
+    };
+    let mut boundary = cursor;
+    let mut run = 0;
+    if backward {
+        for (index, grapheme) in text[..cursor].grapheme_indices(true).rev() {
+            let current = class(grapheme);
+            if run != 0 && current != run { break; }
+            run = current;
+            boundary = index;
+        }
+    } else {
+        for (index, grapheme) in text[cursor..].grapheme_indices(true) {
+            let current = class(grapheme);
+            if run != 0 && current != run { break; }
+            run = current;
+            boundary = cursor + index + grapheme.len();
+        }
+    }
+    boundary
+}
+
 
 pub(crate) fn init(cx: &mut App) {
     cx.bind_keys([
@@ -307,6 +341,25 @@ pub(crate) fn init(cx: &mut App) {
         KeyBinding::new("cmd-shift-f", Replace, Some(CONTEXT)),
         #[cfg(not(target_os = "macos"))]
         KeyBinding::new("ctrl-h", Replace, Some(CONTEXT)),
+        KeyBinding::new("ctrl-a", MoveToStart, Some("HerdrLegacy > Input")),
+        KeyBinding::new("ctrl-e", MoveToEnd, Some("HerdrLegacy > Input")),
+        KeyBinding::new("ctrl-b", MoveLeft, Some("HerdrLegacy > Input")),
+        KeyBinding::new("ctrl-f", MoveRight, Some("HerdrLegacy > Input")),
+        KeyBinding::new("ctrl-h", Backspace, Some("HerdrLegacy > Input")),
+        KeyBinding::new("ctrl-d", Delete, Some("HerdrLegacy > Input")),
+        KeyBinding::new("alt-b", LegacyPreviousWord, Some("HerdrLegacy > Input")),
+        KeyBinding::new("alt-f", LegacyNextWord, Some("HerdrLegacy > Input")),
+        KeyBinding::new("ctrl-u", LegacyKillStart, Some("HerdrLegacy > Input")),
+        KeyBinding::new("ctrl-k", LegacyKillEnd, Some("HerdrLegacy > Input")),
+        KeyBinding::new("ctrl-w", LegacyKillPreviousWord, Some("HerdrLegacy > Input")),
+        KeyBinding::new("ctrl-backspace", LegacyKillPreviousWord, Some("HerdrLegacy > Input")),
+        KeyBinding::new("alt-backspace", LegacyKillPreviousWord, Some("HerdrLegacy > Input")),
+        KeyBinding::new("alt-d", LegacyKillNextWord, Some("HerdrLegacy > Input")),
+        KeyBinding::new("ctrl-y", LegacyYank, Some("HerdrLegacy > Input")),
+        KeyBinding::new("shift-insert", Paste, Some("HerdrLegacy > Input")),
+        #[cfg(not(target_os = "macos"))]
+        KeyBinding::new("ctrl-shift-v", Paste, Some("HerdrLegacy > Input")),
+        KeyBinding::new("ctrl-c", LegacyClearRename, Some("HerdrLegacy > LegacyRename > Input")),
     ]);
 }
 
@@ -446,6 +499,8 @@ pub struct InputBaseState<M: InputModeKind> {
     ///
     /// Always contains at least one selection where index 0 is the active cursor.
     pub(super) selections: Selections,
+    /// Per-field Emacs kill buffer; deliberately separate from the system clipboard.
+    legacy_killed: String,
     /// Range for save the selected word, use to keep word range when drag move.
     pub(super) selected_word_range: Option<CursorSelection>,
     /// The marked range is the temporary insert text on IME typing.
@@ -829,6 +884,7 @@ impl<M: InputModeKind> InputBaseState<M> {
             token_layout_cache: None,
             pressed_token: None,
             selections: Selections::default(),
+            legacy_killed: String::new(),
             selected_word_range: None,
             ime_marked_range: None,
             input_bounds: Bounds::default(),
@@ -2044,6 +2100,71 @@ impl<M: InputModeKind> InputBaseState<M> {
             cx,
         );
     }
+    fn legacy_word_boundary(&self, backward: bool) -> usize {
+        let text = self.text.to_string();
+        legacy_word_boundary(&text, self.cursor(), backward)
+    }
+
+    fn legacy_move_word(&mut self, backward: bool, cx: &mut Context<Self>) {
+        let offset = self.legacy_word_boundary(backward);
+        self.move_to(offset, None, cx);
+    }
+
+    fn legacy_previous_word(&mut self, _: &LegacyPreviousWord, _: &mut Window, cx: &mut Context<Self>) {
+        self.legacy_move_word(true, cx);
+    }
+
+    fn legacy_next_word(&mut self, _: &LegacyNextWord, _: &mut Window, cx: &mut Context<Self>) {
+        self.legacy_move_word(false, cx);
+    }
+
+    fn legacy_kill(&mut self, start: usize, end: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if start == end { return; }
+        self.legacy_killed = self.text.slice(start..end).to_string();
+        let range = self.range_to_utf16(&(start..end));
+        self.undo_manager.set_pending_intent(EditIntent::Atomic);
+        self.replace_text_in_range_silent(Some(range), "", window, cx);
+        self.legacy_repair_cursor(cx);
+    }
+
+    fn legacy_kill_start(&mut self, _: &LegacyKillStart, window: &mut Window, cx: &mut Context<Self>) {
+        self.legacy_kill(0, self.cursor(), window, cx);
+    }
+    fn legacy_kill_end(&mut self, _: &LegacyKillEnd, window: &mut Window, cx: &mut Context<Self>) {
+        self.legacy_kill(self.cursor(), self.text.len(), window, cx);
+    }
+    fn legacy_kill_previous_word(&mut self, _: &LegacyKillPreviousWord, window: &mut Window, cx: &mut Context<Self>) {
+        self.legacy_kill(self.legacy_word_boundary(true), self.cursor(), window, cx);
+    }
+    fn legacy_kill_next_word(&mut self, _: &LegacyKillNextWord, window: &mut Window, cx: &mut Context<Self>) {
+        self.legacy_kill(self.cursor(), self.legacy_word_boundary(false), window, cx);
+    }
+    fn legacy_yank(&mut self, _: &LegacyYank, window: &mut Window, cx: &mut Context<Self>) {
+        if self.legacy_killed.is_empty() { return; }
+        let killed = self.legacy_killed.clone();
+        self.undo_manager.set_pending_intent(EditIntent::Atomic);
+        self.replace_text_in_range_silent(None, &killed, window, cx);
+        self.legacy_repair_cursor(cx);
+    }
+    fn legacy_repair_cursor(&mut self, cx: &mut Context<Self>) {
+        let text = self.text.to_string();
+        let cursor = self.cursor();
+        let boundary = text.grapheme_indices(true)
+            .map(|(index, _)| index)
+            .find(|&index| index >= cursor)
+            .unwrap_or(text.len());
+        if boundary != cursor {
+            self.move_to(boundary, None, cx);
+        }
+    }
+
+    fn legacy_clear_rename(&mut self, _: &LegacyClearRename, window: &mut Window, cx: &mut Context<Self>) {
+        let range = self.range_to_utf16(&(0..self.text.len()));
+        self.undo_manager.set_pending_intent(EditIntent::Atomic);
+        self.replace_text_in_range_silent(Some(range), "", window, cx);
+    }
+
+
 
     pub(super) fn enter(&mut self, action: &Enter, window: &mut Window, cx: &mut Context<Self>) {
         if M::handle_context_menu_action(self, Box::new(action.clone()), window, cx) {
@@ -4640,6 +4761,14 @@ impl<M: InputModeKind> Render for InputBaseState<M> {
                     .on_action(window.listener_for(&entity, InputBaseState::paste))
                     .on_action(window.listener_for(&entity, InputBaseState::cut))
                     .on_action(window.listener_for(&entity, InputBaseState::undo))
+                    .on_action(window.listener_for(&entity, InputBaseState::legacy_kill_start))
+                    .on_action(window.listener_for(&entity, InputBaseState::legacy_kill_end))
+                    .on_action(window.listener_for(&entity, InputBaseState::legacy_kill_previous_word))
+                    .on_action(window.listener_for(&entity, InputBaseState::legacy_kill_next_word))
+                    .on_action(window.listener_for(&entity, InputBaseState::legacy_yank))
+                    .on_action(window.listener_for(&entity, InputBaseState::legacy_previous_word))
+                    .on_action(window.listener_for(&entity, InputBaseState::legacy_next_word))
+                    .on_action(window.listener_for(&entity, InputBaseState::legacy_clear_rename))
                     .on_action(window.listener_for(&entity, InputBaseState::redo))
                     .when(self.is_multi_line(), |this| {
                         this.on_action(window.listener_for(&entity, InputBaseState::indent_inline))
@@ -5566,6 +5695,7 @@ mod tests {
         }
     }
 
+
     struct InputView<M: InputModeKind> {
         input: Entity<InputBaseState<M>>,
         window_handle: gpui::WindowHandle<TestRoot<M>>,
@@ -5639,6 +5769,7 @@ mod tests {
             })
         }
     }
+
 
     /// The frame is laid out by the application, which should not have to
     /// center a single line inside it.

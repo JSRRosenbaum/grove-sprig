@@ -65,11 +65,11 @@ herdr-app do layout.switch --name rowan-terminal
 ```
 
 The installer installs the complete mod dependency set, layout, theme, OMP display
-companion and layout-scoped keybindings. It preserves settings, machine connections,
-terminal overrides and unrelated extensions/shortcuts. On a fresh configuration,
-it retains the platform's built-in global and terminal keybindings.
-Updates use the same command after `git pull --ff-only`. Owned stale files and
-unmodified obsolete overlay bindings are removed; personal additions are retained.
+companion and the effective legacy key profile. **Legacy keys replace global and
+terminal captures**, rather than merging newer shortcuts that would steal program
+input. Existing key files are backed up. Settings, machine connections, running
+terminals and unrelated extensions are preserved.
+Updates use the same command after `git pull --ff-only`. Owned stale files are removed.
 
 Existing files are backed up under
 `~/.local/state/herdr-app/rowan-sidebar-backup-*`. Installation validates all
@@ -83,6 +83,14 @@ copy credentials. Target an explicit window when more than one is open.
 python3 sprig/install.py --app-home /path/to/app-config \
   --agent-home /path/to/omp-agent --backup-home /path/to/new-backup-directory
 ```
+
+Pass `--legacy-config /path/to/old/config.toml` to select the original local
+profile explicitly. Repeat `--legacy-machine-config NAME=/path/to/config.toml`
+for connected servers. By default the frontend keeps its original normal keys,
+prefix and prompts while custom commands come from the selected source. Use
+`--legacy-key-source server` for the old explicit server-keymap policy.
+Unknown servers get frontend normal keys, never local plugin commands.
+`legacy-keys.json` stores compiled metadata, not the original configuration paths.
 
 `HERDR_APP_HOME` and `PI_CODING_AGENT_DIR` select alternate default roots.
 The detailed [customization guide](sprig/README.md) describes navigation and keys.
@@ -129,7 +137,9 @@ Duplicate a shipped layout or mod before changing its structure or code. Your co
 Save a personal layout, mod or key file and the window reloads it.
 A broken edit keeps the last good version and reports the error.
 
-Ctrl+Shift+P shows every command and its key (Cmd+Shift+P on macOS). Change any key in `keys.json`; see [the keys section](defaults/AGENTS.md#keys-keysjson) of the mod guide for the format.
+The legacy profile's help key opens its searchable key guide. Newer global
+shortcuts, including Ctrl+Shift+P, are not reserved in that profile. Other layouts
+use `keys.json`; see [the keys section](defaults/AGENTS.md#keys-keysjson).
 Sprig shows a window-local **PREFIX** bar along the bottom of the main
 content, left-aligned after the visible sidebar and tracking its measured edge
 when resized. It never covers the sidebar. Cancellation/help hints come from

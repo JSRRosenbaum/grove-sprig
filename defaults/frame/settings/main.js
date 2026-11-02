@@ -30,10 +30,11 @@ export default class Settings extends View {
   init(_props, cx) {
     const asked = props()?.section;
     this.section = SECTIONS.some((s) => s.id === asked) ? asked : "look";
+    this.legacyChoice = 0;
     this.picking = null; // "font" | "ui_font" while its list is open
     this.filter = "";
     this.fontInput = InputState.new({ placeholder: "Type to search fonts" });
-    this.fontInput.on("change", (_e, cx) => { this.filter = this.fontInput.value(); cx.notify(); });
+    this.fontInput.on("change", (_e, cx) => { this.filter = this.fontInput.value(); this.fontChoice = 0; cx.notify(); });
     this.renameInput = InputState.new();
     this.renameInput.on("focus", (_e, cx) => { this.renameFocused = true; cx.notify(); });
     this.renameInput.on("blur", (_e, cx) => { this.renameFocused = false; cx.notify(); });
@@ -128,6 +129,137 @@ export default class Settings extends View {
   close() {
     closeOverlay(props().overlay);
   }
+  legacySectionChoices() {
+    if (this.section === "look") {
+      const layout = shared("layout");
+      const shipped = Object.keys(LOOKS);
+      const rank = n => shipped.includes(n) ? shipped.indexOf(n) : shipped.length;
+      const names = [...layouts()].sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
+      const choices = names.map(name => ({ id: `st-l-${name}`, apply: () => run("layout.switch", {name}) }));
+      choices.push(...APPEARANCES.map(([value, label]) => ({
+        id: `st-ap-${label}`, apply: cx => this.change(p => { if (value === null) delete p.appearance; else p.appearance = value; }, cx),
+      })));
+      choices.push(...themes().filter(x => x.name === layout || !layouts().includes(x.name))
+        .sort((a, b) => Number(Boolean(a.light)) - Number(Boolean(b.light)))
+        .map(x => ({ id: `st-t-${x.name}`, apply: () => run("app.theme", { name: x.name }) })));
+      for (const [id, command] of [["st-zoom-minus", "app.zoom_out"], ["st-zoom-plus", "app.zoom_in"], ["st-zoom-reset", "app.zoom_reset"]])
+        choices.push({id, apply: () => run(command)});
+      for (const which of ["font", "ui_font"]) {
+        choices.push({id: `st-f-${which}`, apply: () => {
+          this.picking = which; this.filter = ""; this.fontChoice = 0;
+          this.fontInput.set_value(""); this.fontInput.focus();
+        }});
+        if (which === "font") for (const [suffix, delta] of [["minus", -1], ["plus", 1]])
+          choices.push({id: `st-font_size-${suffix}`, apply: cx => this.change(p => {
+            p.font_size = Math.max(8, Math.min(32, (p.font_size ?? settings().font_size) + delta));
+          }, cx)});
+      }
+      return choices;
+    }
+    if (this.section === "keyboard") return ["auto", "on", "off", "left", "right"].map(value => ({
+      id: `st-option-${value}`, apply: cx => this.change(p => { p.option_as_alt = value; }, cx),
+    }));
+    if (this.section === "alerts") return [
+      { id: "st-sounds", apply: cx => this.change(p => { p.sounds = { ...(p.sounds ?? {}), enabled: p.sounds?.enabled === false }; }, cx) },
+      { id: "st-play-blocked", apply: () => playSound("blocked") },
+      { id: "st-play-done", apply: () => playSound("done") },
+    ];
+    if (this.section === "privacy") return [
+      { id: "st-telemetry", apply: cx => this.change(p => { if (p.telemetry === false) delete p.telemetry; else p.telemetry = false; }, cx) },
+      { id: "st-telemetry-show", apply: () => { this.showData = !this.showData; } },
+    ];
+    if (this.section === "machines") {
+      const choices = [];
+      const version = updates().core.version;
+      for (const machine of this.machineList ?? []) {
+        if (this.machineBusy[machine.name]) continue;
+        if (this.olderCore(machine.version, version)) choices.push({
+          id: `st-m-update-${machine.name}`, apply: cx => this.machineAction(machine.name, "update", cx),
+        });
+        for (const action of ["rename", "rm"]) choices.push({
+          id: `st-m-${action}-${machine.name}`, apply: () => {
+            this.machineEdit = {machine: machine.name, action, name: machine.name};
+            if (action === "rename") {
+              this.renameInput.set_value(machine.name);
+              this.renameInput.set_selected_range({start: 0, end: encodeURIComponent(machine.name).replace(/%[0-9A-F]{2}/g, "_").length});
+              this.renameFocused = true;
+              this.renameInput.focus();
+            }
+          },
+        });
+      }
+      choices.push({id: "st-m-add", apply: () => run("mod.open", {name: "machine-add"})});
+      return choices;
+    }
+    if (this.section === "updates") {
+      const u = updates(), c = u.core;
+      const choices = [{id: "st-whats-new", apply: () => { closeOverlay(props()?.overlay); run("app.whats_new"); }}];
+      const checking = u.checking && this.asked || this.asked && Date.now() - this.asked < 3000 && u.checked && !u.checking;
+      const check = id => ({id, apply: () => { this.asked = Date.now(); run("app.check_updates"); }});
+      if (u.app.updates) {
+        if (u.app.ready) choices.push({id: "st-app-update", apply: () => run("app.update")});
+        else if (u.checks && !checking) choices.push(check("st-check-app"));
+      }
+      if (!c.managed && !c.updating) {
+        if (c.error) choices.push({id: "st-core-retry", apply: () => run("app.update_core")});
+        else if (c.ready) choices.push({id: "st-core-update", apply: () => run("app.update_core")});
+        else if (u.checks && !checking) choices.push(check("st-check-core"));
+      }
+      return choices;
+    }
+    return [];
+  }
+  legacyChoices() {
+    return [...this.legacySectionChoices(), {id: "st-feedback", apply: () => {
+      closeOverlay(props()?.overlay); run("app.feedback");
+    }}];
+  }
+
+
+  legacyKey(e, cx) {
+    if (window()?.layout_name !== "rowan-terminal") return false;
+    const m = e.modifiers ?? {};
+    if (m.control || m.alt || m.platform) return false;
+    const k = e.key;
+    if (this.machineEdit) {
+      if (this.machineEdit.action === "rm" && !m.shift && (k === "enter" || k === "space" || k === " ")) {
+        this.machineAction(this.machineEdit.machine, "rm", cx);
+        cx.stop_propagation(); cx.notify(); return true;
+      }
+      return false;
+    }
+    if (this.picking) {
+      const q = this.filter.toLowerCase();
+      const choices = [...(!q ? [null] : []), ...fonts().filter(f => f.toLowerCase().includes(q)).slice(0, 200)];
+      if (!m.shift && (k === "up" || k === "down")) {
+        this.fontChoice = Math.max(0, Math.min(choices.length - 1, (this.fontChoice ?? 0) + (k === "up" ? -1 : 1)));
+      } else if (!m.shift && k === "enter" && choices.length) {
+        const which = this.picking, name = choices[Math.min(this.fontChoice ?? 0, choices.length - 1)];
+        this.change(p => { if (name === null) delete p[which]; else p[which] = name; }, cx);
+        this.picking = null; this.handle.focus();
+      } else return false;
+      cx.stop_propagation(); cx.notify(); return true;
+    }
+    let delta = 0;
+    if (k === "tab") delta = m.shift ? -1 : 1;
+    else if (!m.shift && (k === "right" || k === "l")) delta = 1;
+    else if (!m.shift && (k === "left" || k === "h")) delta = -1;
+    if (delta) {
+      const index = SECTIONS.findIndex(s => s.id === this.section);
+      this.section = SECTIONS[(index + delta + SECTIONS.length) % SECTIONS.length].id;
+      this.legacyChoice = 0;
+      if (this.section === "machines") cx.spawn(async cx => { await this.loadMachines(); cx.notify(); });
+    } else if (!m.shift && (k === "up" || k === "k" || k === "down" || k === "j")) {
+      const count = this.legacyChoices().length;
+      this.legacyChoice = Math.max(0, Math.min(count - 1, this.legacyChoice + (k === "up" || k === "k" ? -1 : 1)));
+    } else if (!m.shift && (k === "enter" || k === "space" || k === " ")) {
+      this.legacyChoices()[this.legacyChoice]?.apply(cx);
+    } else return false;
+    cx.stop_propagation();
+    cx.notify();
+    return true;
+  }
+
 
   // Pieces ---------------------------------------------------------------
 
@@ -163,6 +295,7 @@ export default class Settings extends View {
       .rounded(7)
       .border_1()
       .border_color(t.border)
+      .when(window()?.layout_name === "rowan-terminal" && this.legacyChoices()[this.legacyChoice]?.id === id, el => el.border_color(t.accent))
       .bg(t.raised)
       .cursor_pointer()
       .text_size(13)
@@ -185,6 +318,7 @@ export default class Settings extends View {
         .cursor_pointer()
         .text_size(15)
         .text_color(t.muted)
+        .when(window()?.layout_name === "rowan-terminal" && this.legacyChoices()[this.legacyChoice]?.id === `${id}-${k}`, el => el.bg(t.selected))
         .hover((s) => s.bg(t.hover).text_color(t.foreground))
         .on_click(f)
         .child(label);
@@ -209,6 +343,7 @@ export default class Settings extends View {
       .p(2)
       .cursor_pointer()
       .bg(on ? t.accent : t.hover)
+      .when(window()?.layout_name === "rowan-terminal" && this.legacyChoices()[this.legacyChoice]?.id === id, el => el.border_1().border_color(t.foreground))
       .flex()
       .when(on, (el) => el.justify_end())
       .on_click(onClick)
@@ -268,7 +403,7 @@ export default class Settings extends View {
             .p(6)
             .rounded(10)
             .border_2()
-            .border_color(on ? t.accent : "#00000000")
+            .border_color(on || window()?.layout_name === "rowan-terminal" && this.legacyChoices()[this.legacyChoice]?.id === `st-l-${name}` ? t.accent : "#00000000")
             .bg(on ? t.raised : "#00000000")
             .cursor_pointer()
             .hover((s) => s.bg(t.raised))
@@ -317,6 +452,7 @@ export default class Settings extends View {
             .cursor_pointer()
             .when(now === value, (el) => el.bg(t.raised).text_color(t.foreground).border_1().border_color(t.border))
             .when(now !== value, (el) => el.text_color(t.muted).hover((s) => s.text_color(t.foreground)))
+            .when(window()?.layout_name === "rowan-terminal" && this.legacyChoices()[this.legacyChoice]?.id === `st-ap-${label}`, el => el.border_1().border_color(t.accent))
             .on_click((_e, cx) =>
               this.change((p) => {
                 if (value === null) delete p.appearance;
@@ -341,6 +477,7 @@ export default class Settings extends View {
           .filter((x) => Boolean(x.light) === light && (x.name === shared("layout") || !layouts().includes(x.name)))
           .map(({ name, colors: c }) => {
           const on = name === current;
+          const selected = window()?.layout_name === "rowan-terminal" && this.legacyChoices()[this.legacyChoice]?.id === `st-t-${name}`;
           const dot = (color) => div().w(8).h(8).rounded(4).bg(color);
           return v_flex()
             .id(`st-t-${name}`)
@@ -349,7 +486,7 @@ export default class Settings extends View {
             .p(6)
             .rounded(10)
             .border_2()
-            .border_color(on ? t.accent : "#00000000")
+            .border_color(on || selected ? t.accent : "#00000000")
             .cursor_pointer()
             .hover((s) => s.bg(t.raised))
             .on_click((_e, cx) => {
@@ -390,13 +527,14 @@ export default class Settings extends View {
       .py(6)
       .rounded(7)
       .border_1()
-      .border_color(open ? t.accent : t.border)
+      .border_color(open || window()?.layout_name === "rowan-terminal" && this.legacyChoices()[this.legacyChoice]?.id === `st-f-${which}` ? t.accent : t.border)
       .bg(t.raised)
       .cursor_pointer()
       .hover((s) => s.bg(t.hover))
       .on_click((_e, cx) => {
         this.picking = open ? null : which;
         this.filter = "";
+        this.fontChoice = 0;
         this.fontInput.set_value("");
         if (this.picking) this.fontInput.focus();
         else this.handle.focus();
@@ -424,6 +562,7 @@ export default class Settings extends View {
         .py(5)
         .rounded(6)
         .cursor_pointer()
+        .when(window()?.layout_name === "rowan-terminal" && id === (!q && (this.fontChoice ?? 0) === 0 ? `st-fd-${which}` : `st-fi-${which}-${(this.fontChoice ?? 0) - (q ? 0 : 1)}`), el => el.bg(t.selected))
         .hover((s) => s.bg(t.hover))
         .on_click(onClick)
         .child(div().font_family(family).text_size(13.5).text_color(t.foreground).child(label));
@@ -522,6 +661,7 @@ export default class Settings extends View {
       .child(div().pb(12).text_size(13).text_color(t.dim).child("Use Option for terminal shortcuts or to type accents and special characters."))
       .children(choices.map(([value, label]) => {
         const on = (this.person.option_as_alt ?? "auto") === value;
+        const selected = window()?.layout_name === "rowan-terminal" && this.legacyChoice === choices.findIndex(([v]) => v === value);
         return h_flex()
           .id(`st-option-${value}`)
           .gap(10)
@@ -531,6 +671,7 @@ export default class Settings extends View {
           .items_center()
           .cursor_pointer()
           .hover((s) => s.bg(t.hover))
+          .when(selected, el => el.bg(t.selected))
           .on_click((_e, cx) => this.change((p) => { p.option_as_alt = value; }, cx))
           .child(div().text_color(on ? t.accent : t.muted).child(on ? "◉" : "○"))
           .child(div().text_size(14).text_color(t.foreground).child(label));
@@ -641,7 +782,7 @@ export default class Settings extends View {
       if (edit.action === "rm") row.child(v_flex().gap(8)
         .child(div().text_size(12.5).text_color(t.muted).child(`Remove ${m.name}? Its terminals keep running there.`))
         .child(h_flex().gap(6).child(cancel).child(this.button(t, `st-m-confirm-${m.name}`, "Remove machine", (_e, cx) => this.machineAction(m.name, "rm", cx)))));
-      else row.child(v_flex().gap(6)
+      else row.child(v_flex().key_context("LegacyRename").gap(6)
         .child(div().text_size(12).text_color(t.dim).child("New name (addresses using the old name stop working)"))
         .child(h_flex().gap(6).items_center()
           .child(Input.new(this.renameInput).flex_1().min_w(0).h(32).px(10).rounded(7).border_1().border_color(this.renameFocused ? t.accent : t.input).bg(t.background).text_size(13).text_color(t.foreground))
@@ -715,7 +856,7 @@ export default class Settings extends View {
                 cx.notify();
               });
     const primary = (id, label, f) =>
-      div().id(id).px(12).py(5).rounded(7).cursor_pointer().bg(t.accent).text_color(t.accent_foreground).text_size(13).font_semibold().hover((s) => s.opacity(0.9)).on_click(f).child(label);
+      div().id(id).px(12).py(5).rounded(7).cursor_pointer().bg(t.accent).text_color(t.accent_foreground).text_size(13).font_semibold().when(window()?.layout_name === "rowan-terminal" && this.legacyChoices()[this.legacyChoice]?.id === id, el => el.border_1().border_color(t.foreground)).hover((s) => s.opacity(0.9)).on_click(f).child(label);
     const app = !u.app.updates
       ? ["A build from source: it updates with git, not here.", null]
       : u.app.ready
@@ -840,6 +981,7 @@ export default class Settings extends View {
             .hover((st) => st.bg(t.raised))
             .on_click((_e, cx) => {
               this.section = s.id;
+              this.legacyChoice = 0;
               this.picking = null;
               this.machineEdit = null;
               this.handle.focus();
@@ -861,6 +1003,7 @@ export default class Settings extends View {
       .bg(t.popover)
       .on_key_down((e, cx) => {
         const k = e.key;
+        if (this.legacyKey(e, cx)) return;
         if (this.machineEdit) {
           if (k === "escape") this.machineEdit = null;
           else return;
@@ -870,6 +1013,7 @@ export default class Settings extends View {
           return;
         }
         if (k === "escape") {
+          if (window()?.layout_name === "rowan-terminal" && Object.keys(this.machineBusy).length) { cx.stop_propagation(); return; }
           if (this.picking) this.picking = null;
           else return this.close();
           this.handle.focus();

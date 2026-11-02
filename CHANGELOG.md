@@ -1,5 +1,18 @@
 # Herdr changelog
 
+## Sprig legacy interaction parity — 2026-11-02
+
+- Restore original prefix ownership, modal navigation, terminal Go To, keyboard
+  copy/search, pane cycling/resize, rename and field-local kill/yank controls.
+- Compile the original host-specific key profiles and custom commands; newer
+  bindings no longer intercept keys owned by terminal programs.
+- Port annotation/review, Worktrunk, Workthreads and sci-fi grid actions to
+  herdr-core without restarting agents or reinstalling the legacy server.
+- Restore copy-on-release feedback and use Windows' registered URL handler for
+  Ctrl-click links. Build Windows executables with the C runtime linked statically.
+- Clear authoritative terminal history without sending input, preserving the
+  wrapped cursor line and leaving alternate-screen programs unchanged.
+
 ## Sprig upstream integration — 2026-11-02
 
 - Integrated all upstream app changes through `71d3e8f`, including released
