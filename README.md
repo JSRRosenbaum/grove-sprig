@@ -152,6 +152,13 @@ Use `--app-home` / `--agent-home` for explicit alternate installation roots.
 
 - Numbered herd tabs retain empty herds. `+` adds one. Right-click a machine heading
   to move that profile to a herd; click a heading to fold it.
+- Drag a **machine heading** onto another heading to reorder whole sections within
+  the current herd, including Local. An accent line marks the destination; dropping
+  outside the sidebar cancels. Right-click a heading for **Move section up/down**.
+  Folded and offline sections can also be reordered. The order is saved per window
+  and herd, survives profile rename and reload, and drives workspace keyboard
+  navigation. Existing orders migrate once from Local-first/alphabetical ordering;
+  newly discovered profiles append without reshuffling existing sections.
 - The sidebar follows the legacy terminal reference: centered herd tabs, centered
   green machine separators, and dense single-line workspace/branch rows,
   left status marks and right-aligned IDs. The large brand/footer blocks are absent;

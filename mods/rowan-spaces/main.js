@@ -98,6 +98,10 @@ export default class Spaces extends View {
     }
     const keys = new Set(["@local", ...this.machines.map(m => this.machineKey(m.name)), ...machines().map(m => this.machineKey(m.name)), ...sp.map(s => this.machineKey(s.machine))]);
     for (const key of keys) if (!this.state.herds.some(h => h.members.includes(key))) { this.state.herds[0].members.push(key); changed = true; }
+    for (const h of this.state.herds) if (!h.sectionOrder) {
+      h.members.sort((a,b) => a === "@local" ? -1 : b === "@local" ? 1 : this.machineName(a).localeCompare(this.machineName(b)));
+      h.sectionOrder = true; changed = true;
+    }
     for (const s of sp) {
       const key = this.spaceKey(s);
       if (!this.state.labels[key]) { this.state.labels[key] = `w${(this.state.nextLabel++).toString(36).toUpperCase()}`; changed = true; }
@@ -132,6 +136,7 @@ export default class Spaces extends View {
     const target = this.state.herds.find(h => h.id === id);
     if (!target || id === this.state.active) return;
     this.remember(spaces(), panes()); this.selecting = null;
+    this.drag = null; this.machineDrag = null;
     this.state.active = id; this.menuMachine = null; this.save();
     const available = spaces().filter(s => target.members.includes(this.machineKey(s.machine)) &&
       machines().some(m => m.name === s.machine && m.layout === "ready"));
@@ -151,7 +156,13 @@ export default class Spaces extends View {
     else if (c.startsWith("active:")) this.activeCommand(c.slice(7));
     else if (c === "herd-add") this.addHerd();
     else if (/^herd-select:\d+$/.test(c)) this.switchHerd(Number(c.slice(12)));
-    else if (c.startsWith("machine-move:")) {
+    else if (c.startsWith("machine-reorder:")) {
+      const match = /^machine-reorder:([^:]+):(up|down)$/.exec(c);
+      if (match) {
+        let name; try { name = decodeURIComponent(match[1]); } catch { return; }
+        this.shiftMachine(this.profileKey(name), match[2] === "up" ? -1 : 1);
+      }
+    } else if (c.startsWith("machine-move:")) {
       const match = /^machine-move:([^:]+):(\d+)$/.exec(c);
       if (match) {
         let name; try { name = decodeURIComponent(match[1]); } catch { return; }
@@ -221,7 +232,7 @@ export default class Spaces extends View {
   }
   addHerd() {
     const id = Math.max(...this.state.herds.map(x => x.id)) + 1;
-    this.state.herds.push({id, members: [], last: null}); this.save(); this.switchHerd(id);
+    this.state.herds.push({id, members: [], last: null, sectionOrder: true}); this.save(); this.switchHerd(id);
   }
   toggleMachine(key) {
     const machine = this.machineName(key);
@@ -232,7 +243,37 @@ export default class Spaces extends View {
     this.repoFolded.has(repo) ? this.repoFolded.delete(repo) : this.repoFolded.add(repo);
     localStorage.setItem("repos.folded", JSON.stringify([...this.repoFolded]));
   }
+  reorderMachine(key, target) {
+    const members = this.herd().members, from = members.indexOf(key), to = members.indexOf(target);
+    if (from < 0 || to < 0 || from === to) return;
+    members.splice(to, 0, members.splice(from, 1)[0]);
+    this.menuMachine = null; this.save();
+  }
+  shiftMachine(key, direction) {
+    const members = this.herd().members, from = members.indexOf(key);
+    if (from >= 0 && members[from + direction]) this.reorderMachine(key, members[from + direction]);
+  }
+  startMachineDrag(key, event) {
+    this.drag = null; this.menuMachine = null;
+    this.machineDrag = this.herd().members.includes(key)
+      ? {key, herd: this.herd().id, start: event.position, moved: false, over: null} : null;
+  }
+  dragMachineOver(key, event, cx) {
+    const d = this.machineDrag;
+    if (!d || d.herd !== this.herd().id) return;
+    if (!d.moved && Math.hypot(event.position.x - d.start.x, event.position.y - d.start.y) < 4) return;
+    const over = key !== d.key && this.herd().members.includes(key) ? key : null;
+    if (!d.moved || d.over !== over) { d.moved = true; d.over = over; cx.notify(); }
+  }
+  finishMachineDrag(key, cx) {
+    const d = this.machineDrag; this.machineDrag = null;
+    if (!d || d.herd !== this.herd().id || !this.herd().members.includes(d.key)) return;
+    if (d.moved && d.over === key) this.reorderMachine(d.key, key);
+    else if (!d.moved && d.key === key) this.toggleMachine(key);
+    cx.notify();
+  }
   startDrag(w, event) {
+    this.machineDrag = null;
     this.drag = machines().some(m => m.name === w.machine && m.layout === "ready")
       ? {id: w.id, start: event.position, moved: false, over: null} : null;
   }
@@ -259,7 +300,7 @@ export default class Spaces extends View {
     cx.notify();
   }
   cancelDrag(cx) {
-    if (this.drag) { this.drag = null; cx.notify(); }
+    if (this.drag || this.machineDrag) { this.drag = null; this.machineDrag = null; cx.notify(); }
   }
   moveSpace(w, direction) {
     const all = spaces(), same = all.filter(s => s.machine === w.machine);
@@ -268,6 +309,7 @@ export default class Spaces extends View {
     run("space.move", {id: w.id, index: all.findIndex(s => s.id === other.id) + 1});
   }
   moveMachine(key, target) {
+    if (target.members.includes(key)) { this.menuMachine = null; return; }
     for (const h of this.state.herds) h.members = h.members.filter(k => k !== key);
     target.members.push(key); this.menuMachine = null; this.save();
   }
@@ -413,7 +455,7 @@ export default class Spaces extends View {
       out.push(...list.filter(x => x.g?.repo === r.g.repo).sort((a,b) => Number(a.g.linked) - Number(b.g.linked)));
     }
     // Machine headings determine the actual sidebar and keyboard order.
-    const keys = [...this.herd().members].sort((a,b) => a === "@local" ? -1 : b === "@local" ? 1 : this.machineName(a).localeCompare(this.machineName(b)));
+    const keys = this.herd().members;
     return keys.flatMap(k => out.filter(r => this.machineKey(r.w.machine) === k));
   }
   row(r, t, compact) {
@@ -462,15 +504,23 @@ export default class Spaces extends View {
   }
   grouped(t, compact, rows) {
     const h = this.herd();
-    const keys = [...h.members].sort((a,b) => a === "@local" ? -1 : b === "@local" ? 1 : this.machineName(a).localeCompare(this.machineName(b)));
-    return keys.flatMap(key => {
+    const keys = h.members;
+    return keys.flatMap((key, index) => {
       const machine = this.machineName(key);
       const layout = machines().find(m => m.name === machine)?.layout;
       const folded = this.folded.has(machine), mine = rows.filter(r => this.machineKey(r.w.machine) === key);
-      const head = h_flex().id(`machine-${key}`).h(Math.ceil(this.metrics.fontSize * 2.6)).flex_none().px(compact ? 3 : 30).gap(3)
+      const drop = this.machineDrag?.moved && this.machineDrag.over === key;
+      const below = drop && keys.indexOf(this.machineDrag.key) < index;
+      const head = h_flex().relative().id(`machine-${key}`).h(Math.ceil(this.metrics.fontSize * 2.6)).flex_none().px(compact ? 3 : 30).gap(3)
         .items_center().text_size(this.metrics.fontSize).text_color(t.foreground).cursor_pointer()
-        .on_click((_e,cx) => { this.toggleMachine(key); cx.notify(); })
+        .tooltip("Drag onto another machine heading to reorder; right-click for section controls")
+        .on_mouse_down("left", event => this.startMachineDrag(key, event))
+        .on_mouse_move((event, cx) => this.dragMachineOver(key, event, cx))
+        .on_mouse_up("left", (_event, cx) => this.finishMachineDrag(key, cx))
         .on_mouse_down("right", (_e,cx) => { this.menuMachine = this.menuMachine === key ? null : key; cx.notify(); })
+        .when(this.machineDrag?.moved && this.machineDrag.key === key, e => e.opacity(0.6))
+        .when(drop, e => e.child(div().absolute().left(0).right(0).h(2).bg(t.accent)
+          .when(below, e => e.bottom(0)).when(!below, e => e.top(0))))
         .child(div().flex_1().h(1).bg(t.idle))
         .when(!compact, e => e.child(h_flex().flex_none().gap(4).items_center()
           .child(div().text_color(t.idle).child("┤"))
@@ -481,6 +531,10 @@ export default class Spaces extends View {
         .when(layout !== "ready", e => e.child(div().flex_none().text_color(t.muted)
           .child(layout === "loading" ? "…" : "!")));
       const menu = this.menuMachine === key ? [
+        ...[[-1, "Move section up"], [1, "Move section down"]].filter(([direction]) => keys[index + direction]).map(([direction, label]) =>
+          h_flex().id(`reorder-${key}-${direction}`).h(this.metrics.rowHeight + 4).px(14)
+            .text_size(this.metrics.fontSize).text_color(t.foreground).cursor_pointer().hover(e => e.bg(t.hover))
+            .on_click((_e,cx) => { this.shiftMachine(key, direction); cx.notify(); }).child(label)),
         ...this.state.herds.map(target => h_flex().id(`move-${key}-${target.id}`).h(this.metrics.rowHeight + 4).px(14)
           .text_size(this.metrics.fontSize).text_color(t.foreground).cursor_pointer().hover(e => e.bg(t.hover))
           .on_click((_e,cx) => { this.moveMachine(key, target); cx.notify(); })

@@ -384,3 +384,69 @@ test('cross-machine, disconnected, removed and off-herd drag targets cannot muta
     assert.deepEqual(calls, [], change);
   }
 });
+
+test('section order migrates once, persists per herd and drives navigation across renamed profiles', async () => {
+  const {mod, create, world, calls} = await setup();
+  world.spaces = [space('local'), space('z/work', 'z'), space('ash/work', 'ash')];
+  world.machines.push({name: 'z', layout: 'ready'}, {name: 'ash', layout: 'ready'});
+  mod.machines = [{id: 'z-id', name: 'z'}, {id: 'ash-id', name: 'ash'}];
+  mod.inventory(world.spaces); mod.shown = new Set(world.spaces.map(s => s.id));
+  assert.equal(mod.herd().members.join(','), '@local,id:ash-id,id:z-id');
+  mod.command('machine-reorder:z:up'); mod.command('machine-reorder:z:up');
+  assert.equal(mod.herd().members.join(','), 'id:z-id,@local,id:ash-id');
+  assert.equal(mod.ordered().map(r => r.w.id).join(','), 'z/work,local,ash/work');
+  world.focus = {space: 'z/work', tab: 'z/work-tab'};
+  mod.command('workspace-next'); assert.equal(calls.at(-1).args.id, 'local');
+  const reloaded = create(); reloaded.machines = mod.machines;
+  world.spaces[1].machine = 'renamed'; world.spaces[1].id = 'renamed/work';
+  world.machines[1].name = 'renamed'; reloaded.machines[0].name = 'renamed';
+  reloaded.inventory(world.spaces);
+  assert.equal(reloaded.herd().members.join(','), 'id:z-id,@local,id:ash-id');
+  reloaded.command('herd-add'); reloaded.command('machine-move:renamed:1');
+  assert.equal(reloaded.herd().members.join(','), 'id:z-id');
+  reloaded.command('machine-reorder:renamed:up');
+  reloaded.command('herd-select:0');
+  assert.equal(reloaded.herd().members.join(','), '@local,id:ash-id');
+});
+
+test('heading drag moves whole offline or folded sections without folding, focusing or changing aliases', async () => {
+  const {mod, create, world, calls} = await setup();
+  const a = space('local'), b = space('ash/b', 'ash'), c = space('ash/c', 'ash');
+  world.spaces = [a, b, c]; world.machines.push({name: 'ash', layout: 'unavailable'});
+  mod.machines = [{id: 'remote', name: 'ash'}]; mod.inventory(world.spaces);
+  mod.folded.add('ash'); const label = mod.label(b);
+  mod.startMachineDrag('id:remote', pointer(20, 60));
+  mod.dragMachineOver('@local', pointer(20, 20), dragContext);
+  mod.finishMachineDrag('@local', dragContext);
+  assert.equal(mod.herd().members.join(','), 'id:remote,@local');
+  assert.equal(mod.folded.has('ash'), true);
+  assert.equal(create().label(b), label);
+  assert.deepEqual(world.spaces, [a, b, c]); assert.deepEqual(calls, []);
+  mod.startMachineDrag('id:remote', pointer(20, 20));
+  mod.dragMachineOver('@local', pointer(20, 60), dragContext);
+  mod.finishMachineDrag('@local', dragContext);
+  assert.equal(mod.herd().members.join(','), '@local,id:remote');
+});
+
+test('heading click jitter folds but cancelled, stale and cross-herd drags never reorder', async () => {
+  const {mod, world} = await setup();
+  world.spaces = [space('local'), space('ash/work', 'ash')];
+  mod.machines = [{id: 'remote', name: 'ash'}]; mod.inventory(world.spaces);
+  mod.startMachineDrag('@local', pointer(20, 20));
+  mod.dragMachineOver('@local', pointer(22, 21), dragContext);
+  mod.finishMachineDrag('@local', dragContext);
+  assert.equal(mod.folded.has(null), true);
+  for (const invalidate of [
+    () => mod.cancelDrag(dragContext),
+    () => { mod.state.active = 1; mod.state.herds.push({id: 1, members: ['@local', 'id:remote'], sectionOrder: true}); },
+    () => { mod.herd().members = ['@local']; },
+  ]) {
+    mod.state.active = 0; mod.state.herds = [{id: 0, members: ['@local', 'id:remote'], sectionOrder: true}];
+    mod.startMachineDrag('@local', pointer(20, 20));
+    mod.dragMachineOver('id:remote', pointer(20, 60), dragContext);
+    invalidate();
+    const before = mod.herd().members.join(',');
+    mod.finishMachineDrag('id:remote', dragContext);
+    assert.equal(mod.herd().members.join(','), before);
+  }
+});
