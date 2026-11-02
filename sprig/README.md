@@ -1,15 +1,13 @@
-# Square Dracula
+# Sprig customization bundle
 
-A square, gapless Dracula layout for [Herdr](https://herdr.dev).
-
-This is the **unofficial Rowan customization fork** at
-[JSRRosenbaum/herdr-square-dracula](https://github.com/JSRRosenbaum/herdr-square-dracula),
-based on [Kyle Avrett's original layout](https://github.com/kyle-avrett/herdr-square-dracula).
-The original layout remains available; the optional [Rowan terminal sidebar](#rowan-terminal-sidebar)
-adds compact herds, guarded navigation, and keyboard parity. No personal machine
-connections, credentials, or running-session state are included.
-The persistent native prefix indicator and improved built-in help require the
-[Rowan herdr-app fork](https://github.com/JSRRosenbaum/herdr-app), not stock Herdr.
+The compact Rowan terminal interface, based on
+[Kyle Avrett's Square Dracula](https://github.com/kyle-avrett/herdr-square-dracula).
+This directory and the native app are maintained together in
+[JSRRosenbaum/grove-sprig](https://github.com/JSRRosenbaum/grove-sprig).
+No personal machine connections, credentials, or running-session state are included.
+The app at the repository root provides independent windows and the native
+prefix/help patches. Runtime `rowan-*` and `square-dracula-*` names are retained
+for installed-state compatibility; a second fork checkout is no longer needed.
 
 ![Square Dracula](preview.png)
 
@@ -26,68 +24,24 @@ not require replacing your global settings or keybindings.
 
 ## Install
 
-Launch Herdr at least once so it creates its shipped assets, and keep it running for the
-layout-switch command below.
-
-Clone this repository outside your Herdr configuration folder:
+From the **Sprig repository root**:
 
 ```sh
-git clone https://github.com/kyle-avrett/herdr-square-dracula.git
-cd herdr-square-dracula
+python3 sprig/install.py
+herdr-app do layout.switch --name rowan-terminal
 ```
 
-Run the following from the cloned repository. It stops without copying anything if the
-layout or any of its mod folders already exists. For an existing installation, use the
-update instructions instead.
+See the [root installation guide](../README.md#install-or-update-sprig-customizations)
+for alternate configuration roots, backups and the update/rollback contract.
+The installer includes all eleven mods used by `rowan-terminal`; it does not
+overwrite global settings or install the author's personal snapshots in
+`settings.json` / `keys.json`. It preserves existing global and terminal keys
+and seeds platform defaults when `keys.json` is missing.
 
-```sh
-(
-  set -e
-  home="${HERDR_APP_HOME:-$HOME/.config/herdr-app}"
-
-  test ! -e "$home/layouts/square-dracula.json"
-  for mod in mods/square-dracula-*; do
-    test ! -e "$home/mods/${mod##*/}"
-  done
-
-  mkdir -p "$home/layouts" "$home/mods"
-  cp layouts/square-dracula.json "$home/layouts/"
-  cp -R mods/square-dracula-* "$home/mods/"
-
-  for mod in "$home"/mods/square-dracula-*; do
-    herdr-app check "$mod"
-  done
-
-  herdr-app do layout.switch --name square-dracula
-)
-```
-
-The default configuration path is `~/.config/herdr-app`. Set `HERDR_APP_HOME` before running
-these commands if your Herdr window uses a different configuration folder.
-
-All custom mods use the `square-dracula-` prefix. Herdr's shipped layouts and mods are not
-replaced. The in-app preview travels inside `mods/square-dracula-workspace-chrome/`; the
-repository's root `preview.png` and `RECIPE.md` are for the gallery.
-
-## Optional picker shortcuts
-
-The sidebar search button opens the square-styled picker without any key changes.
-
-To bind the picker only in this layout, merge the following section into your existing
-`keys.json`. Preserve its other sections and bindings:
-
-```json
-{
-  "layout:square-dracula": {
-    "ctrl-shift-k": "square-dracula-workspace-chrome.picker",
-    "ctrl-x l": "square-dracula-workspace-chrome.picker"
-  }
-}
-```
-
-The repository's `keys.json` and `settings.json` are the author's personal configuration
-snapshots, not required installation files. Do not overwrite your own with them unless you
-want all of those preferences and shortcuts.
+The original Square Dracula layout and assets remain in this directory as
+attributed source, but the supported installer installs the compact Rowan layout
+and its explicit dependency set. Original standalone-layout installation
+instructions remain available in the [upstream repository](https://github.com/kyle-avrett/herdr-square-dracula).
 
 ## Controls
 
@@ -104,20 +58,16 @@ internal interfaces remain Herdr's or the program's own UI.
 
 ## Update or remove
 
-Before updating, back up the installed `layouts/square-dracula.json` and the twelve
-`mods/square-dracula-*` folders. Pull this repository with `git pull --ff-only`, replace only
-those namespaced files and folders, rerun the mod checks from the installation section, and
-switch to `square-dracula` again.
+Pull `grove-sprig/main` with `git pull --ff-only` and rerun
+`python3 sprig/install.py` from the repository root. The ownership manifest
+prevents removal of unrelated files. Existing settings and machine/session state
+are not replaced. Do not run another installer concurrently.
 
-To remove it, first switch to another layout, such as:
-
-```sh
-herdr-app do layout.switch --name main
-```
-
-Then delete only `layouts/square-dracula.json` and the twelve `mods/square-dracula-*` folders
-from your Herdr configuration. If you added the optional keyboard section, remove it too.
-Your terminals and workspaces belong to herdr-core, not to this layout.
+To remove the customization, first switch the selected window to another layout.
+Use `.rowan-install-manifest.json` in your app home to identify the installed
+files; preserve unrelated files and personal keybindings. Backup manifests map
+the replaced files to their saved copies. Terminals and workspaces belong to
+herdr-core, not to this layout.
 
 ## What the mods access
 
@@ -129,13 +79,12 @@ custom HTTP polling loops in these mods.
 
 ## Rowan terminal sidebar
 
-The optional `rowan-terminal` layout ports the compact-herds sidebar behavior from
+The installed `rowan-terminal` layout ports the compact-herds sidebar behavior from
 Joseph's Herdr TUI fork without changing the terminal renderer or moving any programs.
-It uses `rowan-spaces`, `rowan-agents`, `rowan-empty`, and the herd-scoped `rowan-picker`;
-the original Square Dracula mods and layout remain separate.
+It uses `rowan-spaces`, `rowan-agents`, `rowan-empty`, and the herd-scoped `rowan-picker`.
 
 ```sh
-python3 install-rowan.py
+python3 sprig/install.py
 herdr-app check ~/.config/herdr-app/mods/rowan-spaces
 herdr-app check ~/.config/herdr-app/mods/rowan-agents
 herdr-app check ~/.config/herdr-app/mods/rowan-empty
@@ -143,9 +92,9 @@ herdr-app check ~/.config/herdr-app/mods/rowan-picker
 herdr-app do layout.switch --name rowan-terminal
 ```
 
-The installer copies missing Square Dracula dependencies, the Rowan mods/theme/layout,
-and the OMP display companion. It merges only the Rowan layout's key section; unrelated
-bindings, terminal overrides, settings, zoom, and machine configuration are preserved.
+The installer updates its owned Square Dracula dependencies, Rowan mods/theme/layout,
+and OMP display companion. It merges the Rowan layout's key section while preserving
+unrelated bindings, terminal overrides, settings, zoom, and machine configuration.
 Existing files are backed up under `~/.local/state/herdr-app/rowan-sidebar-backup-*`;
 each `manifest.json` maps destination paths to their original numbered copies.
 Use `--app-home` / `--agent-home` for explicit alternate installation roots.

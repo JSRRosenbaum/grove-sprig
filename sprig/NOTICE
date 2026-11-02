@@ -9,6 +9,12 @@ retain their cloned_from provenance. Changes include the square-dracula
 namespace, Dracula appearance, square and gapless styling, compact tabs,
 read-only Changes panel, menu framing, and sidebar footer spacing.
 
+The optional Rowan terminal layout and rowan-* mods add Tokyo Night terminal
+appearance, persistent compact herds, profile-scoped repository folding and
+navigation, stable display labels, and an OMP display-only metadata companion.
+These local changes were AI-authored for Joseph Rosenbaum on 2026-10-30 and
+retain the upstream Apache-2.0 notices.
+
 Some copied SVG glyphs are from Lucide and its Feather-derived icons.
 https://lucide.dev
 https://github.com/lucide-icons/lucide

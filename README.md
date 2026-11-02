@@ -1,12 +1,19 @@
-# Herdr — Rowan multiwindow fork
+# Sprig
 
-Herdr is a desktop app for terminals and coding agents. Keep work in spaces, see which agents need you, and leave terminals running when you close the window.
+Grove's terminal-first Herdr interface: compact herd/workspace navigation,
+independent windows, readable terminal styling, and native prefix/help feedback.
 
-This is an **unofficial fork** of [herdrdev/herdr-app](https://github.com/herdrdev/herdr-app),
-maintained at [JSRRosenbaum/herdr-app](https://github.com/JSRRosenbaum/herdr-app).
-It restores concurrent windows on one configuration and core. The upstream
-installers below install official Herdr, **not this fork**. Local source builds
-do not auto-update; no fork release binaries are published here.
+**Canonical source: [JSRRosenbaum/grove-sprig](https://github.com/JSRRosenbaum/grove-sprig), branch `main`.**
+This unofficial project consolidates our app and layout forks, retaining both
+histories. The app lives at the root; its customization bundle lives in
+[`sprig/`](sprig/README.md). No second customization checkout is needed.
+
+Based on [Herdr app](https://github.com/herdrdev/herdr-app) and
+[Kyle Avrett's Square Dracula](https://github.com/kyle-avrett/herdr-square-dracula).
+This is not an official Herdr release. Existing executable/configuration names
+(`herdr-app`, `rowan-terminal`, `rowan-*`) remain stable to preserve installed state.
+See [provenance and upstream status](docs/sprig.md) for exact imported revisions,
+license attribution, upgrade boundaries, and verification.
 
 ## Multiple windows
 
@@ -42,34 +49,41 @@ one. If several windows are open and none is uniquely active, the request fails
 and asks for a target; it never guesses which window to change. An unavailable
 explicit target fails without falling back to another window.
 
-## Install
+## Install or update Sprig customizations
 
-### Linux and macOS
+Use the Sprig app build for independent windows and the native prefix/help patches.
+An official Herdr installer does **not** install those patches. Sprig does not
+publish release binaries or enable automatic upstream releases.
 
 ```sh
-curl -fsSL https://releases.herdr.dev/app/install.sh | sh
+git clone --recurse-submodules https://github.com/JSRRosenbaum/grove-sprig.git
+cd grove-sprig
+python3 sprig/install.py
+herdr-app do layout.switch --name rowan-terminal
 ```
 
-Linux needs a desktop session and a working Vulkan driver. macOS builds are available for Apple Silicon; Intel Mac users can [build from source](#build-from-source). Linux builds are x86-64 and ARM64.
+The installer installs the complete mod dependency set, layout, theme, OMP display
+companion and layout-scoped keybindings. It preserves settings, machine connections,
+terminal overrides and unrelated extensions/shortcuts. On a fresh configuration,
+it retains the platform's built-in global and terminal keybindings.
+Updates use the same command after `git pull --ff-only`. Owned stale files and
+unmodified obsolete overlay bindings are removed; personal additions are retained.
 
-The installer adds Herdr to your apps and puts the command in `~/.local/bin`.
-Add that folder to your PATH if the installer asks.
-On macOS the app lives in `~/Applications/Herdr.app`.
-For drag-and-drop installation on Apple Silicon, download [Herdr.dmg](https://releases.herdr.dev/app/Herdr.dmg) and drag Herdr to Applications.
+Existing files are backed up under
+`~/.local/state/herdr-app/rowan-sidebar-backup-*`. Installation validates all
+assets before replacing files, refuses symlinks below installation roots, and
+pre-stages rollback copies before changing live data. This is rollback for caught
+I/O errors, not a crash/power-loss transaction; do not edit the same files concurrently.
+The installer does not switch layouts, restart apps/cores, migrate sessions, or
+copy credentials. Target an explicit window when more than one is open.
 
-### Windows
-
-Run in PowerShell on x64 Windows with curl and tar installed (Windows 10 1803 or newer):
-
-```powershell
-irm https://releases.herdr.dev/app/install.ps1 | iex
+```sh
+python3 sprig/install.py --app-home /path/to/app-config \
+  --agent-home /path/to/omp-agent --backup-home /path/to/new-backup-directory
 ```
 
-Herdr appears in the Start menu. The installer adds `%LOCALAPPDATA%\Programs\herdr-app` to your user PATH. Open a new terminal to pick it up.
-
-Both installers download and run code. Read the [shell installer](distribution/install.sh) or [PowerShell installer](distribution/install.ps1) first if you prefer.
-They also install [herdr-core](https://github.com/herdrdev/herdr-core) if it is missing.
-The app can help install or update a core it cannot use.
+`HERDR_APP_HOME` and `PI_CODING_AGENT_DIR` select alternate default roots.
+The detailed [customization guide](sprig/README.md) describes navigation and keys.
 
 ## Find your work
 
@@ -114,7 +128,7 @@ Save a personal layout, mod or key file and the window reloads it.
 A broken edit keeps the last good version and reports the error.
 
 Ctrl+Shift+P shows every command and its key (Cmd+Shift+P on macOS). Change any key in `keys.json`; see [the keys section](defaults/AGENTS.md#keys-keysjson) of the mod guide for the format.
-The Rowan fork shows a window-local **PREFIX** bar along the bottom of the main
+Sprig shows a window-local **PREFIX** bar along the bottom of the main
 content, left-aligned after the visible sidebar and tracking its measured edge
 when resized. It never covers the sidebar. Cancellation/help hints come from
 GPUI's actual pending keymap.
@@ -159,8 +173,8 @@ Clone this repo with its submodules. Use Rust 1.95.0 and Zig 0.16.0, the version
 Linux needs the development packages listed in that workflow.
 
 ```sh
-git clone --recurse-submodules https://github.com/herdrdev/herdr-app.git
-cd herdr-app
+git clone --recurse-submodules https://github.com/JSRRosenbaum/grove-sprig.git
+cd grove-sprig
 just build
 just test
 just install
@@ -170,6 +184,12 @@ Install [just](https://github.com/casey/just) to use these recipes.
 The platform installer builds a release and adds the app to your desktop.
 On Linux it links to this checkout, so keep the checkout in place.
 Quit and reopen Herdr to use the new build.
+
+Build on **Ash**, not the live Rowan workstation. For deployment, transfer the
+verified executable deliberately; do not restart another person's window or core.
+`just test-sprig` runs the Python installer and Node consumer behavior suites;
+`just test` includes them plus the existing Bun and Rust suites. Python 3.9+
+and a current Node.js are required for customization checks.
 
 Documentation checks also need [Bun](https://bun.sh): `just docs-check` checks generated pages and CLI examples; `just docs-generate` refreshes the reference pages.
 

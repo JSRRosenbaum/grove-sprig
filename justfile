@@ -39,9 +39,16 @@ pre-release: test docs-check
 build:
     cargo build --locked
 
-test:
+test: test-sprig
     bun test scripts/files.test.ts
     cargo test --locked
+
+install-sprig:
+    python3 sprig/install.py
+
+test-sprig:
+    python3 -m unittest discover -s sprig/tests -p test_install.py
+    node --experimental-vm-modules --test sprig/mods/rowan-agents/consumer.test.cjs sprig/mods/rowan-picker/consumer.test.cjs sprig/mods/rowan-spaces/navigation.test.mjs
 
 docs-generate: build
     bun scripts/docs.ts generate

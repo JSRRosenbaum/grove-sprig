@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "project": "grove-sprig",
+  "canonical_repository": "https://github.com/JSRRosenbaum/grove-sprig",
+  "app": {
+    "upstream": "https://github.com/herdrdev/herdr-app",
+    "upstream_base": "8180cbe6c947519e8015dd7c35801a93e08a7d66",
+    "imported_fork": "https://github.com/JSRRosenbaum/herdr-app",
+    "imported_revision": "7d5db1f9a32507ee70457d345098bc8463417a08",
+    "source_version": "0.1.9",
+    "source_directory": "."
+  },
+  "customizations": {
+    "upstream": "https://github.com/kyle-avrett/herdr-square-dracula",
+    "upstream_base": "e7640bf166257abaecca27c0fcf8a3190b315cfc",
+    "imported_fork": "https://github.com/JSRRosenbaum/herdr-square-dracula",
+    "imported_revision": "28e57d8072f3c756586094d5e8f8e288d3e3c256",
+    "source_directory": "sprig"
+  },
+  "renderer": {
+    "repository": "https://github.com/ghostty-org/ghostty",
+    "revision": "291fd050b9e9c293c8adb6a140742649b7e42d3a",
+    "directory": "vendor/ghostty"
+  },
+  "qualified_build": {
+    "rust": "1.95.0",
+    "zig": "0.16.0",
+    "core": "0.1.15"
+  },
+  "latest_observed": {
+    "checked_on": "2026-11-02",
+    "app_stable": "0.1.12",
+    "app_stable_revision": "4aa3460749947e7771aa39a8a2cec58d46649926",
+    "app_master_revision": "72d5729718c9ff9c6e413c38f335e8b9f61257b4",
+    "core": "0.1.17",
+    "layout_upstream_revision": "e7640bf166257abaecca27c0fcf8a3190b315cfc",
+    "adopted": false
+  }
+}

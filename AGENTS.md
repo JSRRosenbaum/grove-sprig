@@ -1,8 +1,10 @@
-# Herdr app
+# Sprig
 
-The Herdr 2 desktop app (`herdr-app`): a native GPUI client of
-[herdr-core](https://github.com/herdrdev/herdr-core). Can (`ogulcancelik`)
-maintains it.
+Canonical repository: https://github.com/JSRRosenbaum/grove-sprig, branch `main`.
+Joseph maintains this unofficial interface fork. Native app source is at the
+root; customizations and their installer/tests are under `sprig/`.
+Upstream Herdr app is maintained by Can (`ogulcancelik`); its architecture rules
+remain useful, but Sprig changes are approved by Joseph, not upstream.
 
 If AGENTS.local.md exists, read it too: the maintainer's local rules.
 
@@ -12,11 +14,11 @@ Preserve compatibility with released versions and installed user data.
 Discuss breaking changes and removal of compatibility code with the maintainer
 before changing documented behavior.
 
-## Before you grow the app's core: ask Can
+## Keep the app core small
 
 The app's core (the model, machine layout documents, commands, and shared mod APIs)
 stays small; everything else is mods. Before adding anything to it, answer
-these three, then discuss with Can and wait for his go:
+these three and discuss substantial changes with Joseph:
 
 1. Does the app itself act on it (it changes what the app does, not only
    how something looks)?
@@ -25,8 +27,8 @@ these three, then discuss with Can and wait for his go:
 3. Can mods not do it correctly, even with care?
 
 If all three are no, it belongs in mods (their shared storage, their own
-code), even at the price of some repetition. Same for herdr-core: what the
-app asks of it goes through Can too.
+code), even at the price of some repetition. Changes proposed for upstream
+Herdr app or herdr-core still need discussion with their maintainers.
 
 `herdr-app --skill` prints the window manual in `src/SKILL.md`.
 Keep it current when changing agent-facing behavior.
@@ -66,6 +68,11 @@ On Windows it updates `%LOCALAPPDATA%\Programs\herdr-app` and the Start menu;
 quit and reopen Herdr to use the new build. Windows recipes use PowerShell by default;
 `just --shell pwsh --shell-arg -Command <recipe>` uses pwsh.
 
+Build on Ash, not Rowan. `just install-sprig` installs only the customizations;
+`just test-sprig` runs their installer/consumer suites. Keep runtime IDs stable
+unless an explicit state migration is part of the change. `sprig/upstreams.json`
+records the imported source pins; update it when actually adopting upstream code.
+
 Never run a bare `target/*/herdr-app` (no arguments) on a machine where you
 also use the app without `HERDR_APP_HOME` pointing at a scratch home: it
 opens a second window on your real setup. Subcommands and `--help` only
@@ -81,9 +88,9 @@ down` when done.
 
 ## Contributing
 
-Work on a branch and open a pull request to `master`. CI must pass and Can
-approves; merges are squashed. Commit messages: lowercase conventional
-commits, single line, no AI co-author lines. Only Can releases (a `v*` tag).
+Work on a branch and open a pull request to Sprig's `main`. CI must pass.
+Commit messages: lowercase conventional commits, single line, no AI co-author
+lines. Do not enable upstream publishing workflows or publish official Herdr tags.
 
 Never stop, signal, or restart someone else's app or core. Use an isolated
 app home and core session for testing.

@@ -2,3 +2,7 @@
 /dist
 /.brain
 /AGENTS.local.md
+__pycache__/
+*.pyc
+/defaults/mods/help/gpui-kit.d.ts
+/defaults/mods/help/jsconfig.json

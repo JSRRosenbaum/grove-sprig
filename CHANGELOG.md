@@ -1,5 +1,19 @@
 # Herdr changelog
 
+## Sprig consolidation — 2026-11-02
+
+- Consolidated the custom native app and Square Dracula/Rowan mods in
+  `JSRRosenbaum/grove-sprig`, preserving both complete histories and attribution.
+- Added one canonical installer, `python3 sprig/install.py`, including all eleven
+  mod dependencies, the theme/layout and the OMP companion.
+- Preserved personal settings and unrelated shortcuts; fresh installs retain
+  platform defaults. Updates remove only owned stale files and unchanged obsolete
+  overlay shortcuts.
+- Refused symlink escapes and pre-staged rollback data before changing live files.
+- Integrated installer and consumer behavior checks into the root test workflow.
+- Retained the qualified native app/core baseline. New upstream app/core releases
+  are documented separately, not silently merged during repository consolidation.
+
 ## [0.1.9] - 2026-10-30
 
 ### Unofficial Rowan fork additions - 2026-10-31

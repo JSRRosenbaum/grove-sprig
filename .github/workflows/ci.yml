@@ -1,20 +1,20 @@
-# Build and test every supported platform; release.yml handles packaging.
+# Build and test every supported platform.
 #
-# Rust caches use one pinned toolchain and only master pushes save, so PR
+# Rust caches use one pinned toolchain and only main pushes save, so PR
 # caches can't evict the ones everybody restores. setup-zig caches separately.
 name: ci
 
 on:
   push:
-    branches: [master]
+    branches: [main]
   # No paths-ignore here: CI is required to merge, so every PR needs it.
   pull_request:
 
 permissions:
   contents: read
 
-# A newer push cancels older runs, on a PR and on master: PRs were tested
-# before merging, so only master's newest commit needs a run.
+# A newer push cancels older runs, on a PR and on main: PRs were tested
+# before merging, so only main's newest commit needs a run.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
@@ -28,7 +28,7 @@ env:
   CARGO_PROFILE_TEST_DEBUG: "1"
   # Incremental state only bloats a cache: CI builds each commit once.
   CARGO_INCREMENTAL: "0"
-  SAVE_CACHES: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+  SAVE_CACHES: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
 jobs:
   platform-tests:
@@ -36,7 +36,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Match release's glibc floor and native platform runners.
+          # Match the glibc floor and native platform runners.
           - { platform: linux-x86_64, runner: ubuntu-22.04 }
           - { platform: macos-aarch64, runner: macos-15 }
           - { platform: windows-x86_64, runner: windows-2022 }
@@ -56,7 +56,7 @@ jobs:
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
         with:
           version: ${{ env.ZIG_VERSION }}
-      # The whole target/, like release.yml: rust-cache drops the vendored crates.
+      # Cache the whole target/: rust-cache drops the vendored crates.
       # Keyed by what the dependencies build from, so a source-only push
       # restores an exact hit and saves nothing (no cache per commit).
       - name: Restore build cache
@@ -125,6 +125,12 @@ jobs:
       - name: Install Bun
         if: matrix.platform == 'linux-x86_64'
         run: curl -fsSL https://bun.sh/install | bash -s "bun-v1.4.4"
+      - name: Check files and Sprig behavior
+        if: matrix.platform == 'linux-x86_64'
+        run: |
+          ~/.bun/bin/bun test scripts/files.test.ts
+          python3 -m unittest discover -s sprig/tests -p test_install.py
+          node --experimental-vm-modules --test sprig/mods/rowan-agents/consumer.test.cjs sprig/mods/rowan-picker/consumer.test.cjs sprig/mods/rowan-spaces/navigation.test.mjs
       - name: Check documentation
         if: matrix.platform == 'linux-x86_64'
         run: |
