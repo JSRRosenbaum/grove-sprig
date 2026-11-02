@@ -50,6 +50,8 @@ export function playSound(sound: string): null;
  * "" gives the space or tab Herdr's automatic name again. The main ones:
  * Spaces: space.new {name?, folder?, tab?, argv?, task?, machine?}, space.close {id?}, space.rename {id?, name},
  *   space.move {id, index}, space.select {index | id}, space.next, space.prev.
+ *   Keys/clicks select a new space; CLI/script creation preserves the view.
+ *   A script that intentionally shows it calls space.select with the returned space id.
  * Tabs: tab.new {name?, space?, folder?, argv?, task?} (argv: an agent, task: its first message)
  *   or {name?, space?, mod, props?} (a tab whose only pane is a mod),
  *   tab.close {id?}, tab.rename {id?, name}, tab.move {id, index}, tab.select {index | id},

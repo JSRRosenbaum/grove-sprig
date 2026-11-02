@@ -2012,8 +2012,13 @@ impl AppWindow {
             slot.document = Some(document.clone());
             if replace {
                 let on = (!machine.is_empty()).then_some(machine.as_str());
+                // Only a first load into an untouched empty model may choose a default.
+                // A background-created space is structure, not a request to show it.
+                let preserve_empty = self.model.active.is_none()
+                    && (!first || self.selected_machine.is_some() || !self.model.spaces.is_empty());
                 document.replace(&mut self.model, on);
                 if first && let Some(view) = &self.initial_view { view.apply_machine(&mut self.model, on); }
+                if preserve_empty { self.model.active = None; }
                 changed = true;
             }
             if conflict {
@@ -2259,10 +2264,9 @@ impl AppWindow {
                 .cloned()
                 .or_else(|| rec.and_then(|r| r.get("foreground").and_then(|f| f.get("cwd")).or_else(|| r.get("cwd"))).and_then(Value::as_str).map(str::to_owned))
                 .unwrap_or_else(|| mods::home().to_string_lossy().into_owned());
-            let active = self.model.active.clone();
-            self.model.add_space(space, "", &folder, new_ctx);
+            let select = self.model.active.is_none();
+            self.model.add_space(space, "", &folder, new_ctx, select);
             self.model.space_mut(space).unwrap().machine = machine;
-            self.model.active = active.or(Some(space.to_owned()));
             return;
         }
         let target = self.model.tab(&ctx_id).and_then(|c| c.root.panes().last().map(|p| p.id.clone()));
@@ -2473,9 +2477,9 @@ impl AppWindow {
         })
     }
 
-    /// A space with its first tab and terminal, shown at once.
+    /// A space with its first tab and terminal. Only user-origin creation selects it.
     /// `machine`: another machine (`hc machine ls`); its space starts in that machine's home.
-    fn new_space(&mut self, name: &str, folder: Option<String>, ctx_name: Option<&str>, argv: Option<Vec<String>>, task: Option<&str>, machine: Option<String>) -> Result<Value, String> {
+    fn new_space(&mut self, name: &str, folder: Option<String>, ctx_name: Option<&str>, argv: Option<Vec<String>>, task: Option<&str>, machine: Option<String>, select: bool) -> Result<Value, String> {
         let on = machine.as_deref();
         // The focused pane's folder only means something on its own machine.
         let here = || self.model.focused_pane().and_then(|p| self.model.address_of(&p))
@@ -2485,7 +2489,7 @@ impl AppWindow {
         let (space, ctx, pane) = (self.model.fresh_id_on("sp", on), self.model.fresh_id_on("tb", on), self.model.fresh_id_on("p", on));
         let addr = self.spawn(Self::agent_argv(argv.clone(), task, on).or(argv), folder.clone(), &space, &ctx, on)?;
         let ctx_name = ctx_name.map(str::trim).unwrap_or_default();
-        self.model.add_space(&space, name.trim(), &folder, Tab::new(&ctx, ctx_name, &pane, &addr));
+        self.model.add_space(&space, name.trim(), &folder, Tab::new(&ctx, ctx_name, &pane, &addr), select);
         if let Some(p) = self.model.space_mut(&space) {
             p.machine = machine;
         }
@@ -2950,14 +2954,14 @@ impl AppWindow {
                 if let Err(error) = self.require_document((!machine.is_empty()).then_some(machine)) { return self.fail(error); }
                 self.selected_machine = Some(machine.to_owned());
                 self.model.active = self.model.spaces.iter().find(|space| space.machine.as_deref().unwrap_or("") == machine).map(|space| space.id.clone());
-                self.focused_pane = None;
+                // sync must see the old pane to release its keyboard focus when this machine is empty.
                 self.focused_block = None;
                 self.agent = None;
             }
             "space.new" => {
                 let name = Self::arg(a, "name").unwrap_or_default();
-                let r = self.new_space(name, Self::owned(a, "folder"), Self::arg(a, "tab"), Self::argv(a), Self::arg(a, "task"), Self::owned(a, "machine").filter(|m| !m.is_empty()));
-                if r.is_ok() { self.selected_machine = None; }
+                let r = self.new_space(name, Self::owned(a, "folder"), Self::arg(a, "tab"), Self::argv(a), Self::arg(a, "task"), Self::owned(a, "machine").filter(|m| !m.is_empty()), person);
+                if r.is_ok() && person { self.selected_machine = None; }
                 self.answer(r);
             }
             "space.close" => {
@@ -3011,7 +3015,7 @@ impl AppWindow {
                     Some(m) => self.new_mod_tab(Self::owned(a, "space"), name, m, a.get("props").cloned().unwrap_or(Value::Null)),
                     // A person's new tab with no space open starts one, as space.new does.
                     None if person && a.get("space").is_none() && self.model.active_space().is_none() => {
-                        self.new_space("", Self::owned(a, "folder"), Some(name), Self::argv(a), Self::arg(a, "task"), self.selected_machine.clone().filter(|m| !m.is_empty()))
+                        self.new_space("", Self::owned(a, "folder"), Some(name), Self::argv(a), Self::arg(a, "task"), self.selected_machine.clone().filter(|m| !m.is_empty()), true)
                     }
                     None => self.new_tab(Self::owned(a, "space"), name, Self::owned(a, "folder"), Self::argv(a), Self::arg(a, "task")),
                 };
@@ -5261,7 +5265,7 @@ mod tests {
         use serde_json::json;
         let mut model = crate::model::Model::default();
         assert_eq!(super::new_space_machine(&json!({}), true, &model), None);
-        model.add_space("remote", "", "", crate::model::Tab::new("tab", "", "pane", "second/t1"));
+        model.add_space("remote", "", "", crate::model::Tab::new("tab", "", "pane", "second/t1"), true);
         model.space_mut("remote").unwrap().machine = Some("second".into());
         for args in [json!({}), json!({"machine": null})] {
             assert_eq!(super::new_space_machine(&args, true, &model).as_deref(), Some("second"));
@@ -5271,7 +5275,7 @@ mod tests {
             assert_eq!(super::new_space_machine(&json!({"machine": "other"}), person, &model).as_deref(), Some("other"));
             assert_eq!(super::new_space_machine(&json!({"machine": ""}), person, &model), None);
         }
-        model.add_space("local", "", "", crate::model::Tab::new("local-tab", "", "local-pane", "t1"));
+        model.add_space("local", "", "", crate::model::Tab::new("local-tab", "", "local-pane", "t1"), true);
         assert_eq!(super::new_space_machine(&json!({}), true, &model), None);
         model.active = Some("remote".into());
         assert_eq!(super::new_space_machine(&json!({}), true, &model).as_deref(), Some("second"));

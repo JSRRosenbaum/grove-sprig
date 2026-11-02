@@ -45,13 +45,15 @@ only after a successful check; on failure, check the connection and retry.
 
 ## Show something when asked
 
-New spaces and tabs are shown immediately: only create them when asked.
-Pick an explicit, useful name for every new space and tab; don't rely on
-default names. Use IDs from `ls` rather than guessing or acting on the wrong
-focused pane.
+CLI-created spaces leave the current workspace, tab and pane unchanged. When asked
+to show a new space, explicitly `space.select` its returned `space` ID.
+New tabs are still shown immediately. Only create spaces or tabs when asked.
+Pick explicit useful names; use IDs from `ls` rather than guessing targets.
 
 ```sh
 herdr-app do space.new --name api --folder /path/to/api
+# Only when an intentional view switch was requested:
+herdr-app do space.select --id <returned-space-id>
 herdr-app do tab.new --name "fix login" --argv '["claude"]' --task "Look at the login bug"
 herdr-app do pane.split --direction right --pane p12
 herdr-app do agent.focus --terminal t7

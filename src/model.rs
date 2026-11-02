@@ -270,11 +270,14 @@ impl Model {
         (p.tabs.iter().position(|x| x.id == c.id).unwrap_or(0) + 1).to_string()
     }
 
-    pub fn add_space(&mut self, id: &str, name: &str, folder: &str, ctx: Tab) {
+    /// Insert shared structure; only a person's creation selects it on this screen.
+    pub fn add_space(&mut self, id: &str, name: &str, folder: &str, ctx: Tab, select: bool) {
         let active = Some(ctx.id.clone());
         self.spaces.push(Space { id: id.to_owned(), name: name.to_owned(), folder: folder.to_owned(), machine: None, tabs: vec![ctx], active });
         self.recent.retain(|r| r.name != name);
-        self.active = Some(id.to_owned());
+        if select {
+            self.active = Some(id.to_owned());
+        }
     }
 
     /// Adds a tab after the space's selected one and selects it (not the space).
@@ -644,7 +647,7 @@ mod tests {
     #[test]
     fn unnamed_spaces_follow_their_first_terminal_and_tabs_count() {
         let mut m = Model::default();
-        m.add_space("p1", "", "/home/me", Tab::new("c1", "", "x1", "t1"));
+        m.add_space("p1", "", "/home/me", Tab::new("c1", "", "x1", "t1"), true);
         m.add_tab("p1", Tab::new("c2", "review", "x2", "t2"));
         m.add_tab("p1", Tab::new("c3", "", "x3", "t3"));
         let p = m.space("p1").unwrap().clone();
@@ -685,7 +688,7 @@ mod tests {
 
     fn model_with_one() -> Model {
         let mut m = Model::default();
-        m.add_space("p1", "api", "/src/api", Tab::new("c1", "fix login", "x1", "t1"));
+        m.add_space("p1", "api", "/src/api", Tab::new("c1", "fix login", "x1", "t1"), true);
         m
     }
 
@@ -708,7 +711,7 @@ mod tests {
     fn closing_the_last_pane_closes_tab_then_space_and_remembers_it() {
         let mut m = model_with_one();
         m.add_tab("p1", Tab::new("c2", "docs", "x2", "t2"));
-        m.add_space("p2", "web", "/src/web", Tab::new("c3", "deploy", "x3", "t3"));
+        m.add_space("p2", "web", "/src/web", Tab::new("c3", "deploy", "x3", "t3"), true);
         assert_eq!(m.active.as_deref(), Some("p2"));
         assert_eq!(m.remove_pane("x3"), (true, true));
         assert_eq!(m.active.as_deref(), Some("p1"));
@@ -717,7 +720,7 @@ mod tests {
         assert_eq!(m.remove_pane("x2"), (true, false));
         assert_eq!(m.active_tab().map(|c| c.id.as_str()), Some("c1"));
         // Opening it again takes it off the recent list.
-        m.add_space("p4", "web", "/src/web", Tab::new("c4", "x", "x4", "t4"));
+        m.add_space("p4", "web", "/src/web", Tab::new("c4", "x", "x4", "t4"), true);
         assert!(m.recent.is_empty());
     }
 
@@ -899,11 +902,32 @@ mod tests {
     }
 
     #[test]
+    fn background_space_creation_preserves_the_shown_tab_pane_and_zoom() {
+        let mut m = model_with_one();
+        m.add_tab("p1", Tab::new("c2", "review", "x2", "t2"));
+        m.split("x2", Axis::Row, "x3", "t3");
+        m.tab_mut("c2").unwrap().zoomed = Some("x3".into());
+
+        m.add_space("background", "job", "/job", Tab::new("job-tab", "", "job-pane", "t4"), false);
+
+        assert_eq!(m.active.as_deref(), Some("p1"));
+        assert_eq!(m.active_tab().map(|t| t.id.as_str()), Some("c2"));
+        assert_eq!(m.focused_pane().as_deref(), Some("x3"));
+        assert_eq!(m.tab("c2").unwrap().zoomed.as_deref(), Some("x3"));
+        assert_eq!(m.space("background").unwrap().active_tab().unwrap().focused_pane().as_deref(), Some("job-pane"));
+        assert_eq!(m.address_of("job-pane").as_deref(), Some("t4"));
+
+        m.add_space("foreground", "manual", "/manual", Tab::new("manual-tab", "", "manual-pane", "t5"), true);
+        assert_eq!(m.active.as_deref(), Some("foreground"));
+        assert_eq!(m.focused_pane().as_deref(), Some("manual-pane"));
+    }
+
+    #[test]
     fn focus_follows_panes_across_tabs_and_spaces() {
         let mut m = model_with_one();
         m.add_tab("p1", Tab::new("c2", "b", "x2", "t2"));
         assert_eq!(m.focused_pane().as_deref(), Some("x2"));
-        m.add_space("p2", "web", "/w", Tab::new("c3", "c", "x3", "t3"));
+        m.add_space("p2", "web", "/w", Tab::new("c3", "c", "x3", "t3"), true);
         assert!(m.focus_pane("x1"));
         assert_eq!(m.active.as_deref(), Some("p1"));
         assert_eq!(m.focused_pane().as_deref(), Some("x1"));

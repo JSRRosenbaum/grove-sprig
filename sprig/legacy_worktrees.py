@@ -417,7 +417,8 @@ def worktrunk(request):
     if existing:
         app(request, 'space.select', {'id': existing['id']})
     else:
-        app(request, 'space.new', {'name': label, 'folder': path, 'machine': machine or ''})
+        created = app(request, 'space.new', {'name': label, 'folder': path, 'machine': machine or ''})
+        app(request, 'space.select', {'id': created['space']})
 
 
 def main(request):

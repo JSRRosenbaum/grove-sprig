@@ -1,5 +1,11 @@
 # Herdr changelog
 
+## Sprig background workspace focus fix — 2026-11-02
+
+- Background workspace creation no longer switches the addressed window away
+  from its current workspace, tab or pane. Keys/clicks and intentional worktree
+  launches still select the newly created workspace.
+
 ## Sprig legacy interaction parity — 2026-11-02
 
 - Restore original prefix ownership, modal navigation, terminal Go To, keyboard

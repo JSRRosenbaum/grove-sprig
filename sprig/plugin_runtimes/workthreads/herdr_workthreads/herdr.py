@@ -108,13 +108,12 @@ def call(*args: str) -> dict:
             if "--focus" in args:
                 invoke("do", "space.select", json.dumps({"id": existing["id"]}))
             return {"workspace": {"workspace_id": existing["id"], "label": existing.get("name")}}
-        active = next((s["id"] for s in spaces if s.get("active")), None)
         created = invoke("do", "space.new", json.dumps({"folder": folder, "name": option("--label") or "", "machine": machine or ""}))
         workspace_id = created.get("space")
         if not workspace_id:
             raise HerdrError("unreadable_response", "space.new did not return an id", args)
-        if "--no-focus" in args and active:
-            invoke("do", "space.select", json.dumps({"id": active}))
+        if "--focus" in args:
+            invoke("do", "space.select", json.dumps({"id": workspace_id}))
         return {"workspace": {"workspace_id": workspace_id, "label": option("--label")}}
     if args[:2] in (("workspace", "focus"), ("workspace", "close")):
         spaces = invoke("ls").get("spaces", [])

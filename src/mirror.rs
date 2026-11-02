@@ -226,7 +226,7 @@ mod tests {
     use crate::layout::Axis;
     fn model() -> Model {
         let mut m = Model::default();
-        m.add_space("s", "work", "/work", Tab::new("t", "task", "p", "t1"));
+        m.add_space("s", "work", "/work", Tab::new("t", "task", "p", "t1"), true);
         m
     }
     #[test]
@@ -315,7 +315,7 @@ mod tests {
         doc.replace(&mut m, Some("a"));
         doc.replace(&mut m, None);
         assert_eq!(m.spaces.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(), ["s", "a/s", "z/s"]);
-        m.add_space("s2", "", "", Tab::new("t2", "", "p2", "t2"));
+        m.add_space("s2", "", "", Tab::new("t2", "", "p2", "t2"), true);
         m.order_spaces();
         assert!(m.move_space("s", usize::MAX));
         assert_eq!(m.spaces.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(), ["s2", "s", "a/s", "z/s"]);
