@@ -40,11 +40,11 @@ Runtime names are intentionally unchanged; repository consolidation is not a sta
 | Square Dracula | `e7640bf1` plus Rowan patches | `e7640bf1` | Already at upstream base |
 
 Sources: [app release manifest](https://releases.herdr.dev/app/latest.json),
-[app base-to-master comparison](https://github.com/herdrdev/herdr-app/compare/8180cbe6c947519e8015dd7c35801a93e08a7d66...72d5729718c9ff9c6e413c38f335e8b9f61257b4),
+[app base-to-master comparison](https://github.com/herdrdev/herdr-app/compare/8180cbe6c947519e8015dd7c35801a93e08a7d66...70e7e99ace297c53b17993d824be981df7151a60),
 [layout upstream](https://github.com/kyle-avrett/herdr-square-dracula).
 Stable app tag points to `4aa3460749947e7771aa39a8a2cec58d46649926`;
-master was `72d5729718c9ff9c6e413c38f335e8b9f61257b4` when fetched.
-There are 64 commits from our base to stable and 23 more on master.
+master was `70e7e99ace297c53b17993d824be981df7151a60` at the final publication fetch.
+There are 64 commits from our base to stable and 24 more on master.
 App 0.1.12 declares minimum core 0.1.11; this is not proof that all our patches
 are compatible without qualification. The observed core 0.1.17 notes concern
 macOS core lifetime (issue 294); no core restart is needed for consolidation.
@@ -66,13 +66,14 @@ Master-only, not part of the observed stable release:
 - [`6a741257`](https://github.com/herdrdev/herdr-app/commit/6a741257): keep Wayland input on the first seat; relevant to our earlier CUA virtual-seat issue.
 - [`64316dcb`](https://github.com/herdrdev/herdr-app/commit/64316dcb), [`b03019e0`](https://github.com/herdrdev/herdr-app/commit/b03019e0), [`414a06db`](https://github.com/herdrdev/herdr-app/commit/414a06db): control-chord and shortcut-help fixes; inspect against our prefix/key patches.
 - [`c720514d`](https://github.com/herdrdev/herdr-app/commit/c720514d), [`2ceb2744`](https://github.com/herdrdev/herdr-app/commit/2ceb2744): workspace-order reconciliation/navigation; qualify with sidebar drag and herd-scoped navigation.
+- [`70e7e99a`](https://github.com/herdrdev/herdr-app/commit/70e7e99a): Windows Files panel handles OneDrive paths and curly quotes.
 
 Do not mistake the earlier Kitty file-transport addition for a current fix:
 [`e66ce975`](https://github.com/herdrdev/herdr-app/commit/e66ce975) reverted it pending safe reads.
 
 ## Upgrade and verification boundary
 
-Do not merge 87 upstream commits as part of renaming repositories. The upstream
+Do not merge 88 upstream commits as part of renaming repositories. The upstream
 range changes `src/window.rs` heavily and overlaps our `src/model.rs`, `src/keys.rs`
 and `defaults/AGENTS.md` patches. A subsequent Ash build must requalify concurrent
 windows with independent selection/zoom, prefix cancellation/help, terminal image
