@@ -1,6 +1,5 @@
 # Herdr changelog
 
-<<<<<<< HEAD
 ## Sprig upstream integration — 2026-11-06
 
 - Rebased Sprig onto upstream herdr-app `cfcf836` (released 0.1.13 plus reviewed
@@ -10,13 +9,32 @@
   sidebar, durable repository/worktree grouping, prompt-free New worktree and
   remote clipboard paste on the new upstream base.
 - Source pins are recorded in `sprig/upstreams.json`.
-=======
+
+## [sprig-preview-2026.11.02] - 2026-11-02
+
+### New
+- Publish paired Linux x86-64 and Windows x64 app/core/customization development
+  bundles, with native annotation/review tools, checksums and install/rollback
+  instructions. Thanks @JSRRosenbaum.
+- Restore legacy prefix/help, navigation, copy/search, pane controls and
+  host-specific shortcuts. (#1, thanks @JSRRosenbaum)
+
+### Fixed
+- Creating a workspace in the background no longer steals the current view.
+  (#1, thanks @JSRRosenbaum)
+- Restore copy-on-release feedback and Windows Ctrl-click URL handling.
+  Windows binaries no longer need a separate VC++ Redistributable.
+  (#1, thanks @JSRRosenbaum)
+
+Development snapshot, not a stable/upstream release. Windows desktop validation
+and the disabled repository CI gate remain outstanding. Linux binaries require
+glibc 2.44; no macOS or ARM binaries are included.
+
 ## Sprig background workspace focus fix — 2026-11-02
 
 - Background workspace creation no longer switches the addressed window away
   from its current workspace, tab or pane. Keys/clicks and intentional worktree
   launches still select the newly created workspace.
->>>>>>> 6c182c1 (fix: preserve window view during background workspace creation)
 
 ## Sprig legacy interaction parity — 2026-11-02
 
