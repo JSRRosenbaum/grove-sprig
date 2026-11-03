@@ -134,6 +134,8 @@ pub struct TerminalView {
     copy_mode: Option<CopyMode>,
     copy_search_task: Option<Task<()>>,
     copy_search_running: bool,
+    /// A potentially visible pane waits for measured canvas geometry before attach.
+    pub(crate) waiting_for_layout: bool,
     _reader: Option<Task<()>>,
 }
 
@@ -229,9 +231,10 @@ fn track_mouse_button(buttons: &mut Vec<MouseButton>, action: GhosttyMouseAction
 }
 
 impl TerminalView {
-    /// Attaches at `size` (cols, rows): the terminal's current size, so attaching
-    /// a hidden terminal doesn't resize its program.
-    pub fn attach(core: Arc<Core>, address: String, size_hint: (u16, u16), cx: &mut Context<Self>) -> Self {
+    /// Attach after first layout: visible panes have their actual cell geometry,
+    /// while hidden panes retain the source size hint.
+    /// Otherwise an old-size snapshot can arrive after prepaint resized the VT.
+    pub fn attach(core: Arc<Core>, address: String, size_hint: (u16, u16), wait_for_layout: bool, cx: &mut Context<Self>) -> Self {
         let mut view = TerminalView {
             address: address.clone(),
             title: address.clone(),
@@ -280,10 +283,20 @@ impl TerminalView {
             copy_mode: None,
             copy_search_task: None,
             copy_search_running: false,
+            waiting_for_layout: true,
             _reader: None,
         };
-        view.connect(core, false, cx);
+        if !wait_for_layout { view.attach_pending(cx); }
         view
+    }
+
+    /// Hidden panes can attach at the source hint; visible panes call this only
+    /// from canvas prepaint, after their real columns, rows and cell are known.
+    pub fn attach_pending(&mut self, cx: &mut Context<Self>) {
+        if !self.waiting_for_layout { return; }
+        self.waiting_for_layout = false;
+        let core = self.grid.borrow().core.clone();
+        self.connect(core, false, cx);
     }
 
     /// Attaches to the same terminal on a (new) core connection.
@@ -293,7 +306,8 @@ impl TerminalView {
         }
         self.ended = None;
         self.lost = false;
-        self.connect(core, true, cx);
+        if self.waiting_for_layout { self.grid.borrow_mut().core = core; }
+        else { self.connect(core, true, cx); }
         cx.notify();
     }
 
@@ -1940,6 +1954,7 @@ impl Render for TerminalView {
         let grid_paint = self.grid.clone();
         let selection_view = cx.entity().downgrade();
         let resize_view = cx.entity().downgrade();
+        let pending_attach = self.waiting_for_layout;
         let (input_focus, input_view) = (self.focus.clone(), cx.entity());
         let ended = self.ended.clone().or_else(|| self.lost.then(|| "reconnecting to core…".to_owned()));
         let search_input = self.search_open.then(|| self.search_input.clone()).flatten();

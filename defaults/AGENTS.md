@@ -1031,6 +1031,17 @@ All of it is in `herdr.d.ts`. In short:
   A returned root path means refresh everything (the pending paths are bounded).
   Files also refreshes on its 10-second timer:
   `cx.spawn(async (cx) => { for (;;) { await watchFolder(dir); this.reload(); cx.notify(); } })`.
+- Core documents: `readDocument(name, { on })` returns `{ value, version }`;
+  `writeDocument(name, value, version, { on })` compares the version and returns
+  `{ written: true, version }`, or `{ written: false, value, version }` with
+  the latest document on conflict. Merge and retry conflicts; other errors reject.
+  Omit `on` (or use null) for this core; a machine name routes to that core.
+  Use a separate document name for mod data, not the app's `herdr-app` document.
+  Sprig's Rowan sidebar stores repository membership in `sprig-sidebar`, keyed by
+  source-local workspace ID. It restores matching cwd entries before Git discovery,
+  merges version conflicts, and prunes only against a fresh source layout; offline
+  cores keep their records. Window selection, folds and herds are not in that
+  document. New sidebar mods require a frontend exposing these document functions.
 - `notify({ ..., action: { name, args } })`: the toast runs the command when clicked.
 - This copy: `props()`, `shared(key)` / `setShared(key, value)` (every mod
   sees it; setting re-renders all), `nextCommand()` (key commands for this

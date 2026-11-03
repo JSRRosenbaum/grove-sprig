@@ -3,7 +3,7 @@
 
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { spaces, machines, panes, run, openOverlay, exec, hc, theme, shared, setShared, watchFolder, window, focused, nextCommand, settings, keys } from "herdr";
+import { spaces, machines, panes, run, openOverlay, exec, hc, readDocument, writeDocument, theme, shared, setShared, watchFolder, window, focused, nextCommand, settings, keys } from "herdr";
 
 // Where a space is now: its first terminal's live folder, else where it was made.
 // `ps`: panes(), read once by the caller (each read copies every pane).
@@ -29,6 +29,7 @@ export function tone(t, status) {
 export default class Spaces extends View {
   init(_props, cx) {
     this.git = {}; this.checked = {}; this.unsure = new Set(); this.pending = new Set(); this.inFlight = new Set(); this.gitMachine = {};
+    this.hierarchy = new Map(); this.verified = new Map(); this.gitRevision = 0;
     this.busy = {}; this.ready = {}; this.at = {}; this.watching = new Set();
     this.shown = new Set(spaces().map(s => s.id)); this.born = {}; this.machines = [];
     this.handle = cx.focus_handle();
@@ -193,7 +194,7 @@ export default class Spaces extends View {
     if (c === "font-larger") { this.setFontRatio(this.fontMetrics().ratio * 100 + 5); return; }
     if (c === "font-reset") { this.setFontRatio(80); return; }
     if (/^font-ratio:\d+(?:\.\d+)?$/.test(c)) { this.setFontRatio(Number(c.slice(11))); return; }
-    if (c === "inspect") setShared("rowan.sidebar.inspect", {state: this.state, order: this.ordered().map(r => r.w.id), repos: this.ordered().filter(r => r.g).map(r => r.g.repo)});
+    if (c === "inspect") setShared("rowan.sidebar.inspect", {state: this.state, order: this.ordered().map(r => r.w.id), repos: this.ordered().filter(r => r.g).map(r => r.g.repo), hierarchy: [...this.hierarchy.values()].map(s => ({machine: s.on, identity: s.identity, attempted: s.attempted, busy: s.busy, error: s.error}))});
     else if (c.startsWith("active:")) this.activeCommand(c.slice(7));
     else if (c === "herd-add") this.addHerd();
     else if (/^herd-select:\d+$/.test(c)) this.switchHerd(Number(c.slice(12)));
@@ -412,10 +413,120 @@ export default class Spaces extends View {
     const now = Date.now();
     const sp = spaces();
     for (const s of sp) if (!this.shown.has(s.id)) this.born[s.id] ??= now;
+    this.syncHierarchy(cx);
     const due = this.due(now, sp, panes());
     if (due.size) this.refreshGit(due, cx);
     this.reconcileOrder(now);
     if (sp.some((s) => !this.shown.has(s.id))) cx.notify();
+  }
+
+  // Core stores the facts, not this window's ordering, selection or fold state.
+  // A first document read precedes Git discovery; later reads share other
+  // frontends' changes without rescanning their checkouts.
+  syncHierarchy(cx) {
+    const now = Date.now(), sp = spaces(), ps = panes();
+    for (const m of machines()) {
+      const on = m.name ?? null, identity = this.machineKey(on);
+      let slot = this.hierarchy.get(on);
+      if (!slot || slot.identity !== identity) {
+        for (const key of Object.keys(this.git)) if (JSON.parse(key)[0] === on && this.gitMachine[key] !== identity) {
+          delete this.git[key]; delete this.checked[key]; delete this.gitMachine[key];
+          this.unsure.delete(key); this.verified.delete(key);
+        }
+        slot = {on, identity, ready: false, attempted: false, busy: false, dirty: true, next: 0, error: null};
+        this.hierarchy.set(on, slot);
+      }
+      if (m.layout !== "ready") { slot.ready = false; continue; }
+      if (!slot.ready) { slot.ready = true; slot.attempted = false; slot.next = 0; }
+      const signature = JSON.stringify([
+        sp.filter(s => (s.machine ?? null) === on).map(s => [s.id, place(s, ps)]).sort((a,b) => a[0].localeCompare(b[0])),
+        m.space_order ?? null
+      ]);
+      if (signature !== slot.signature) { slot.signature = signature; slot.dirty = true; }
+      if (slot.busy || (!slot.dirty && now < slot.next)) continue;
+      slot.busy = true; slot.dirty = false; slot.next = now + 15000;
+      cx.spawn(async cx => {
+        try {
+          await this.refreshHierarchy(slot, cx);
+          slot.error = null;
+        } catch (error) {
+          slot.error = String(error.message ?? error);
+          slot.next = Date.now() + 15000;
+        } finally {
+          slot.attempted = true; slot.busy = false;
+          cx.notify();
+        }
+      });
+    }
+  }
+  hierarchyCurrent(slot) {
+    return this.hierarchy.get(slot.on) === slot && slot.identity === this.machineKey(slot.on) &&
+      machines().some(m => (m.name ?? null) === slot.on && m.layout === "ready");
+  }
+  hierarchyValue(value) {
+    if (value === null) return {schema: 1, spaces: {}};
+    if (!value || value.schema !== 1 || !value.spaces || typeof value.spaces !== "object" || Array.isArray(value.spaces))
+      throw new Error("Unsupported sprig-sidebar document; left unchanged");
+    return value;
+  }
+  restoreHierarchy(slot, document, cx) {
+    const ps = panes();
+    for (const s of spaces()) {
+      if ((s.machine ?? null) !== slot.on) continue;
+      const id = JSON.parse(this.spaceKey(s))[1], entry = document.spaces[id], key = where(s, ps);
+      if (!entry || entry.cwd !== place(s, ps) || this.verified.has(key) || this.inFlight.has(key)) continue;
+      const g = entry.git;
+      if (g !== null && (!g || typeof g.name !== "string" || typeof g.commonDir !== "string" || typeof g.linked !== "boolean")) continue;
+      const info = g === null ? null : {name: g.name, repo: JSON.stringify([slot.on, g.commonDir]), linked: g.linked};
+      if (!(key in this.git) || JSON.stringify(this.git[key]) !== JSON.stringify(info)) {
+        this.git[key] = info; this.checked[key] = Date.now();
+        if (info === null) this.unsure.add(key);
+      }
+      this.gitMachine[key] = slot.identity;
+      if (info && !slot.on) this.watch(g.commonDir, cx);
+    }
+  }
+  async refreshHierarchy(slot, cx) {
+    const options = {on: slot.on};
+    // Read hierarchy first: a layout read before it could miss a workspace
+    // another frontend has already added to the newer hierarchy snapshot.
+    let snapshot = await readDocument("sprig-sidebar", options);
+    let layout = await readDocument("herdr-app", options);
+    for (let attempt = 0; attempt < 3; attempt++) {
+      if (!this.hierarchyCurrent(slot)) return;
+      const document = this.hierarchyValue(snapshot.value);
+      if (layout.value !== null && (!Array.isArray(layout.value?.spaces) ||
+          layout.value.spaces.some(s => !s || typeof s.id !== "string")))
+        throw new Error("Cannot reconcile sidebar without a valid workspace document");
+      const live = new Set((layout.value?.spaces ?? []).map(s => s.id));
+      this.restoreHierarchy(slot, document, cx);
+      const next = {...document, spaces: {...document.spaces}}, revisions = new Map(), ps = panes();
+      // Only a fresh source-core layout can remove metadata. Missing optimistic
+      // spaces(), a loading layout, and disconnected machines are not deletion.
+      for (const id of Object.keys(next.spaces)) if (!live.has(id)) delete next.spaces[id];
+      for (const s of spaces()) {
+        if ((s.machine ?? null) !== slot.on) continue;
+        const id = JSON.parse(this.spaceKey(s))[1], key = where(s, ps);
+        if (!live.has(id) || !this.verified.has(key) || this.gitMachine[key] !== slot.identity || this.unsure.has(key)) continue;
+        const info = this.git[key];
+        if (info === undefined) continue;
+        next.spaces[id] = {cwd: place(s, ps), git: info === null ? null :
+          {name: info.name, commonDir: JSON.parse(info.repo)[1], linked: info.linked}};
+        revisions.set(key, this.verified.get(key));
+      }
+      let result;
+      if (JSON.stringify(next) !== JSON.stringify(document)) {
+        result = await writeDocument("sprig-sidebar", next, snapshot.version, options);
+        if (!this.hierarchyCurrent(slot)) return;
+      }
+      if (!result || result.written) {
+        for (const [key, revision] of revisions) if (this.verified.get(key) === revision) this.verified.delete(key);
+        return;
+      }
+      snapshot = result;
+      layout = await readDocument("herdr-app", options);
+    }
+    throw new Error("Sidebar changed concurrently; will reconcile on the next read");
   }
 
   // Places whose git could have changed: new ones (a new space, a cd), where a
@@ -430,6 +541,7 @@ export default class Spaces extends View {
       const on = JSON.parse(k)[0], identity = this.machineKey(on);
       if (k in this.gitMachine && this.gitMachine[k] !== identity) {
         delete this.git[k]; delete this.checked[k]; delete this.gitMachine[k]; this.unsure.delete(k);
+        this.verified.delete(k);
       }
     }
     const due = new Set([...keys].filter((k) => !(k in this.git) && !this.inFlight.has(k) && !this.pending.has(k)));
@@ -455,7 +567,10 @@ export default class Spaces extends View {
         if (asks && !this.inFlight.has(k) && !this.pending.has(k) && !this.folded.has(JSON.parse(k)[0]) && now - (this.checked[k] ?? 0) > FALLBACK) due.add(k);
       }
     }
-    return due;
+    return new Set([...due].filter(k => {
+      const slot = this.hierarchy.get(JSON.parse(k)[0]);
+      return !slot || (slot.ready && slot.attempted);
+    }));
   }
 
   // Places sharing a repository may need rediscovery after a worktree operation.
@@ -534,9 +649,15 @@ export default class Spaces extends View {
           this.gitMachine[key] = result.machine;
           if (result.unsure) this.unsure.add(key); else this.unsure.delete(key);
           if (result.info !== undefined) this.git[key] = result.info;
+          if (result.info !== undefined) {
+            this.verified.set(key, ++this.gitRevision);
+            const slot = this.hierarchy.get(on);
+            if (slot) slot.dirty = true;
+          }
           else this.git[key] ??= null;
           if (result.info && !on) this.watch(JSON.parse(result.info.repo)[1], cx);
         }
+        this.syncHierarchy(cx);
         cx.notify();
         keys.forEach(k => this.inFlight.delete(k));
       }

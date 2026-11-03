@@ -4,9 +4,30 @@ import vm from 'node:vm';
 import {readFile} from 'node:fs/promises';
 
 // Exercise the real mod class with only its host APIs replaced; no live app or core.
-async function setup() {
+async function setup(documents = new Map()) {
   const saved = new Map(), calls = [], values = new Map();
   const world = {spaces: [], panes: [], machines: [{name: null, layout: 'ready'}], focus: null, settings: {font_size: 15, zoom: 1}, keys: [], layout: 'rowan-terminal', applyMoves: true, ackMoves: true, hc: async () => ({code: 0, stdout: '{"machines":[]}'})};
+  const copy = value => value == null ? value : JSON.parse(JSON.stringify(value));
+  const docKey = (name, on) => JSON.stringify([on ?? null, name]);
+  world.documents = documents;
+  world.docKey = docKey;
+  world.readDocument = async (name, options = {}) => {
+    const on = options.on ?? null;
+    const prefix = on ? `${on}/` : '';
+    const layout = {spaces: world.spaces.filter(s => (s.machine ?? null) === on).map(s => ({
+      id: prefix && s.id.startsWith(prefix) ? s.id.slice(prefix.length) : s.id,
+    }))};
+    const doc = documents.get(docKey(name, on)) ?? {value: name === 'herdr-app' ? layout : null, version: 0};
+    return copy(doc);
+  };
+  world.writeDocument = async (name, value, version, options = {}) => {
+    const key = docKey(name, options.on);
+    const current = documents.get(key) ?? {value: null, version: 0};
+    if (current.version !== version) return {written: false, ...copy(current)};
+    const next = {value: copy(value), version: version + 1};
+    documents.set(key, next);
+    return {written: true, version: next.version};
+  };
   const localStorage = {getItem: k => saved.get(k) ?? null, setItem: (k, v) => saved.set(k, v)};
   // Every fluent element call returns the same object, including conditional children.
   function el() {
@@ -45,7 +66,8 @@ async function setup() {
       },
       shared: key => values.get(key), setShared: (key, value) => values.set(key, value),
       theme: () => ({dim: 'dim', foreground: 'fg', selected: 'selected', hover: 'hover', chrome: 'chrome', unknown: 'unknown'}),
-      window: () => ({active: false, layout_name: world.layout}), keys: () => world.keys, openOverlay: spec => calls.push({name: 'openOverlay', spec}), exec: (...args) => world.exec(...args), hc: args => world.hc(args), watchFolder: () => new Promise(() => {}), nextCommand() {},
+      window: () => ({active: world.active ?? false, layout_name: world.layout}), keys: () => world.keys, openOverlay: spec => calls.push({name: 'openOverlay', spec}), exec: (...args) => world.exec(...args), hc: args => world.hc(args), watchFolder: () => new Promise(() => {}), nextCommand() {},
+      readDocument: (...args) => world.readDocument(...args), writeDocument: (...args) => world.writeDocument(...args),
     },
   };
   const source = await readFile(new URL('./main.js', import.meta.url), 'utf8');
@@ -186,7 +208,7 @@ test('delayed repository discovery is bounded and publishes a complete hierarchy
   mod.machines = [{id: 'core-one', name: 'ash'}]; mod.inventory(items);
   mod.shown = new Set(items.map(s => s.id));
   const lookups = [];
-  let active = 0, peak = 0, task;
+  let active = 0, peak = 0;
   world.exec = (cmd, args, opts) => {
     if (args[0] === 'rev-parse') {
       active++; peak = Math.max(peak, active);
@@ -198,7 +220,7 @@ test('delayed repository discovery is bounded and publishes a complete hierarchy
     }
     throw new Error(`unexpected command ${cmd} ${args.join(' ')}`);
   };
-  const cx = {spawn: fn => { task = fn(cx); }, notify() {}};
+  const context = hierarchyContext(), cx = context.cx;
   const order = () => Array.from(mod.ordered(), row => row.w.id);
   const flush = () => new Promise(resolve => setImmediate(resolve));
   mod.refreshGit(new Set(items.map(s => JSON.stringify([s.machine, s.folder]))), cx);
@@ -213,7 +235,7 @@ test('delayed repository discovery is bounded and publishes a complete hierarchy
   lookups[4].finish(); lookups[5].finish(); await flush();
   assert.equal(peak, 4);
   assert.deepEqual(order(), ['main', 'linked', 'other', 'extra1', 'extra2', 'extra3']);
-  await task;
+  await context.drain();
   assert.equal(mod.ordered()[0].g.repo, JSON.stringify(['ash', '/main/.git']));
 });
 
@@ -223,25 +245,25 @@ test('machine identity changes invalidate discovery and retry transient failures
   world.machines.push({name: 'ash', layout: 'ready'});
   mod.machines = [{id: 'old-core', name: 'ash'}]; mod.inventory(world.spaces);
   mod.shown.add(item.id);
-  let fails = false, tasks = [];
+  let fails = false;
   world.exec = async (cmd, args) => {
     if (fails) throw new Error('offline');
     if (args[0] === 'rev-parse') return {code: 0, stdout: '/main\n/main/.git\n'};
     throw new Error('unexpected command');
   };
-  const cx = {spawn: fn => { tasks.push(fn(cx)); }, notify() {}};
+  const context = hierarchyContext(), cx = context.cx;
   const key = JSON.stringify(['ash', '/main']);
-  mod.refreshGit(new Set([key]), cx); await tasks.shift();
+  mod.refreshGit(new Set([key]), cx); await context.drain();
   assert.equal(mod.ordered()[0].g.repo, JSON.stringify(['ash', '/main/.git']));
   mod.machines = [{id: 'new-core', name: 'ash'}]; fails = true;
   mod.inventory(world.spaces);
   const due = mod.due(Date.now(), world.spaces, world.panes);
   assert.equal(due.has(key), true);
   assert.equal(mod.ordered()[0].g, null);
-  mod.refreshGit(due, cx); await tasks.shift();
+  mod.refreshGit(due, cx); await context.drain();
   assert.equal(mod.unsure.has(key), true);
   fails = false;
-  mod.refreshGit(new Set([key]), cx); await tasks.shift();
+  mod.refreshGit(new Set([key]), cx); await context.drain();
   assert.equal(mod.ordered()[0].g.repo, JSON.stringify(['ash', '/main/.git']));
 });
 
@@ -255,16 +277,15 @@ test('nested and symlinked worktrees share only their own machine repository; no
   world.machines.push({name: 'ash', layout: 'ready'}, {name: 'ash-other', layout: 'ready'});
   mod.machines = [{id: 'one', name: 'ash'}, {id: 'two', name: 'ash-other'}];
   mod.inventory(world.spaces); mod.shown = new Set(world.spaces.map(s => s.id));
-  let task;
   world.exec = async (cmd, args, opts) => {
     assert.equal(args[0], 'rev-parse');
     if (opts.cwd === '/plain') return {code: 128, stderr: 'fatal: not a git repository'};
     if (opts.cwd === linked.folder) return {code: 0, stdout: '/worktrees/feature\r\n/project/.git\r\n'};
     return {code: 0, stdout: '/project\r\n/project/.git\r\n'};
   };
-  const cx = {spawn: fn => { task = fn(cx); }, notify() {}};
+  const context = hierarchyContext(), cx = context.cx;
   mod.refreshGit(new Set(world.spaces.map(s => JSON.stringify([s.machine, s.folder]))), cx);
-  await task;
+  await context.drain();
   const rows = mod.ordered();
   assert.deepEqual(Array.from(rows, row => row.w.id), ['main', 'linked', 'plain', 'remote']);
   assert.equal(rows[0].g.repo, rows[1].g.repo);
@@ -697,4 +718,230 @@ test('rebuilt machine retry persists successful removal and never repairs ordina
   reloaded.reconnect({...machine, name: 'unrelated', why: 'connection refused'}, cx);
   assert.equal(jobs.length, 0);
   assert.equal(requests.length, before);
+});
+
+// A core owns both documents; profile names are routes, not document keys.
+const sidebarEntry = (cwd, commonDir = '/project/.git', linked = false) =>
+  ({cwd, git: {name: 'project', commonDir, linked}});
+const sidebar = spaces => ({schema: 1, spaces});
+const doc = (world, name, value, on = 'ash', version = 1) =>
+  world.documents.set(world.docKey(name, on), {value, version});
+const documentValue = (world, name, on = 'ash') =>
+  world.documents.get(world.docKey(name, on))?.value;
+const json = value => JSON.parse(JSON.stringify(value));
+
+function hierarchyContext() {
+  const jobs = [];
+  const cx = {spawn: fn => { jobs.push(Promise.resolve(fn(cx))); }, notify() {}};
+  return {cx, async drain() {
+    while (jobs.length) await jobs.shift();
+  }};
+}
+
+function hierarchyWorld(mod, world, ids, machineId = 'core-one') {
+  world.machines = [{name: 'ash', layout: 'ready'}];
+  world.spaces = ids.map(id => {
+    const s = space(`ash/${id}`, 'ash');
+    s.folder = `/${id}`;
+    return s;
+  });
+  mod.machines = [{id: machineId, name: 'ash'}];
+  mod.inventory(world.spaces);
+  mod.shown = new Set(world.spaces.map(s => s.id));
+}
+
+async function syncHierarchy(mod, context) {
+  mod.syncHierarchy(context.cx);
+  await context.drain();
+}
+
+function groups(mod) {
+  return Object.fromEntries(Array.from(mod.ordered(), row => [row.w.id, row.g && {
+    repo: row.g.repo, name: row.g.name, linked: row.g.linked,
+  }]));
+}
+
+test('a fresh frontend restores worktree grouping from its core before Git discovery', async () => {
+  const {mod, create, world} = await setup();
+  hierarchyWorld(mod, world, ['main', 'linked']);
+  doc(world, 'herdr-app', {spaces: [{id: 'main'}, {id: 'linked'}]});
+  doc(world, 'sprig-sidebar', sidebar({
+    main: sidebarEntry('/main'), linked: sidebarEntry('/linked', '/project/.git', true),
+  }));
+  let gitCalls = 0;
+  world.exec = async () => { gitCalls++; throw new Error('Git must not be needed to restore'); };
+  const fresh = create();
+  hierarchyWorld(fresh, world, ['main', 'linked']);
+  const ctx = hierarchyContext();
+  fresh.checkNew(ctx.cx);
+  await ctx.drain();
+  const rows = groups(fresh);
+  assert.equal(rows['ash/main'].repo, JSON.stringify(['ash', '/project/.git']));
+  assert.equal(rows['ash/linked'].repo, rows['ash/main'].repo);
+  assert.equal(rows['ash/linked'].linked, true);
+  assert.equal(gitCalls, 0);
+});
+
+test('a conflicting concurrent workspace update is merged instead of overwritten', async () => {
+  const {mod, world} = await setup();
+  hierarchyWorld(mod, world, ['main', 'linked']);
+  doc(world, 'herdr-app', {spaces: [{id: 'main'}, {id: 'linked'}]});
+  doc(world, 'sprig-sidebar', sidebar({}));
+  const ctx = hierarchyContext();
+  await syncHierarchy(mod, ctx);
+  world.exec = async (_cmd, _args, opts) => ({code: 0, stdout: `${opts.cwd}\n/project/.git\n`});
+  const write = world.writeDocument;
+  let conflicted = false;
+  world.writeDocument = async (name, value, version, options) => {
+    if (name === 'sprig-sidebar' && !conflicted) {
+      conflicted = true;
+      const current = world.documents.get(world.docKey(name, options?.on));
+      world.documents.set(world.docKey(name, options?.on), {
+        version: current.version + 1,
+        value: sidebar({...current.value.spaces, linked: sidebarEntry('/linked', '/project/.git', true)}),
+      });
+    }
+    return write(name, value, version, options);
+  };
+  mod.refreshGit(new Set([JSON.stringify(['ash', '/main'])]), ctx.cx);
+  await ctx.drain();
+  await syncHierarchy(mod, ctx);
+  assert.equal(conflicted, true);
+  assert.deepEqual(json(documentValue(world, 'sprig-sidebar')), sidebar({
+    main: sidebarEntry('/main', '/project/.git', true),
+    linked: sidebarEntry('/linked', '/project/.git', true),
+  }));
+});
+
+test('authoritative closure removes only the closed workspace, preserving its worktree', async () => {
+  const {mod, world} = await setup();
+  hierarchyWorld(mod, world, ['main', 'linked']);
+  doc(world, 'herdr-app', {spaces: [{id: 'main'}, {id: 'linked'}]});
+  doc(world, 'sprig-sidebar', sidebar({
+    main: sidebarEntry('/main'), linked: sidebarEntry('/linked', '/project/.git', true),
+  }));
+  const ctx = hierarchyContext();
+  await syncHierarchy(mod, ctx);
+  world.spaces = world.spaces.filter(s => s.id !== 'ash/main');
+  doc(world, 'herdr-app', {spaces: [{id: 'linked'}]}, 'ash', 2);
+  await syncHierarchy(mod, ctx);
+  assert.deepEqual(json(documentValue(world, 'sprig-sidebar')), sidebar({
+    linked: sidebarEntry('/linked', '/project/.git', true),
+  }));
+  assert.equal(groups(mod)['ash/linked'].repo, JSON.stringify(['ash', '/project/.git']));
+});
+
+test('a transient missing workspace and an offline machine do not delete metadata', async () => {
+  const {mod, world} = await setup();
+  hierarchyWorld(mod, world, ['main', 'linked']);
+  const expected = sidebar({main: sidebarEntry('/main'), linked: sidebarEntry('/linked', '/project/.git', true)});
+  doc(world, 'herdr-app', {spaces: [{id: 'main'}, {id: 'linked'}]});
+  doc(world, 'sprig-sidebar', expected);
+  const ctx = hierarchyContext();
+  await syncHierarchy(mod, ctx);
+  world.spaces = world.spaces.filter(s => s.id !== 'ash/main');
+  await syncHierarchy(mod, ctx);
+  assert.deepEqual(json(documentValue(world, 'sprig-sidebar')), expected);
+  world.machines[0].layout = 'offline';
+  world.spaces = [];
+  const read = world.readDocument;
+  world.readDocument = async (name, options) => {
+    if (options?.on === 'ash') throw new Error('offline');
+    return read(name, options);
+  };
+  await syncHierarchy(mod, ctx);
+  assert.deepEqual(json(documentValue(world, 'sprig-sidebar')), expected);
+});
+
+test('hydration rejects a stale cwd and data from a replaced machine identity', async () => {
+  const {mod, create, world} = await setup();
+  hierarchyWorld(mod, world, ['main']);
+  doc(world, 'herdr-app', {spaces: [{id: 'main'}]});
+  doc(world, 'sprig-sidebar', sidebar({main: sidebarEntry('/old')}));
+  const ctx = hierarchyContext();
+  await syncHierarchy(mod, ctx);
+  assert.equal(groups(mod)['ash/main'], null);
+  doc(world, 'sprig-sidebar', sidebar({main: sidebarEntry('/main')}));
+  const fresh = create();
+  hierarchyWorld(fresh, world, ['main']);
+  const freshContext = hierarchyContext();
+  await syncHierarchy(fresh, freshContext);
+  assert.equal(groups(fresh)['ash/main'].repo, JSON.stringify(['ash', '/project/.git']));
+  // A second core with the same route must not inherit the first core's cache.
+  hierarchyWorld(fresh, world, ['main'], 'core-two');
+  doc(world, 'sprig-sidebar', sidebar({main: sidebarEntry('/elsewhere')}));
+  fresh.checkNew(freshContext.cx);
+  await freshContext.drain();
+  assert.equal(groups(fresh)['ash/main'], null);
+});
+
+test('transient Git discovery errors preserve restored repository metadata', async () => {
+  const {mod, world} = await setup();
+  hierarchyWorld(mod, world, ['main']);
+  const expected = sidebar({main: sidebarEntry('/main')});
+  doc(world, 'herdr-app', {spaces: [{id: 'main'}]});
+  doc(world, 'sprig-sidebar', expected);
+  const ctx = hierarchyContext();
+  await syncHierarchy(mod, ctx);
+  world.exec = async () => { throw new Error('temporary transport failure'); };
+  mod.refreshGit(new Set([JSON.stringify(['ash', '/main'])]), ctx.cx);
+  await ctx.drain();
+  await syncHierarchy(mod, ctx);
+  assert.equal(groups(mod)['ash/main'].repo, JSON.stringify(['ash', '/project/.git']));
+  assert.deepEqual(json(documentValue(world, 'sprig-sidebar')), expected);
+});
+
+test('unknown sidebar schemas are never overwritten by discovery or cleanup', async () => {
+  const {mod, world} = await setup();
+  hierarchyWorld(mod, world, ['main']);
+  const unknown = {schema: 42, spaces: {closed: {future: true}}, extra: 'keep'};
+  doc(world, 'herdr-app', {spaces: [{id: 'main'}]});
+  doc(world, 'sprig-sidebar', unknown);
+  const ctx = hierarchyContext();
+  await syncHierarchy(mod, ctx);
+  world.exec = async () => ({code: 0, stdout: '/main\n/project/.git\n'});
+  mod.refreshGit(new Set([JSON.stringify(['ash', '/main'])]), ctx.cx);
+  await ctx.drain();
+  await syncHierarchy(mod, ctx);
+  assert.deepEqual(json(documentValue(world, 'sprig-sidebar')), unknown);
+});
+
+test('cleanup retains a workspace published between hierarchy and layout reads', async () => {
+  const {mod, world} = await setup();
+  hierarchyWorld(mod, world, ['main']);
+  doc(world, 'herdr-app', {spaces: [{id: 'main'}]});
+  doc(world, 'sprig-sidebar', sidebar({main: sidebarEntry('/main')}));
+  const read = world.readDocument;
+  let published = false;
+  const expected = sidebar({main: sidebarEntry('/main'), linked: sidebarEntry('/linked', '/project/.git', true)});
+  world.readDocument = async (name, options) => {
+    if (name === 'sprig-sidebar' && !published) {
+      published = true;
+      doc(world, 'herdr-app', {spaces: [{id: 'main'}, {id: 'linked'}]}, 'ash', 2);
+      doc(world, 'sprig-sidebar', expected, 'ash', 2);
+    }
+    return read(name, options);
+  };
+  await syncHierarchy(mod, hierarchyContext());
+  assert.deepEqual(json(documentValue(world, 'sprig-sidebar')), expected);
+});
+
+test('a restored non-repository is revalidated after becoming a repository while closed', async () => {
+  const {mod, world} = await setup();
+  hierarchyWorld(mod, world, ['main']);
+  doc(world, 'herdr-app', {spaces: [{id: 'main'}]});
+  doc(world, 'sprig-sidebar', sidebar({main: {cwd: '/main', git: null}}));
+  const ctx = hierarchyContext();
+  await syncHierarchy(mod, ctx);
+  assert.equal(groups(mod)['ash/main'], null);
+  world.active = true;
+  const start = Date.now();
+  assert.equal(mod.due(start, world.spaces, []).size, 0);
+  const due = mod.due(start + 60001, world.spaces, []);
+  assert.deepEqual([...due], [JSON.stringify(['ash', '/main'])]);
+  world.exec = async () => ({code: 0, stdout: '/main\n/project/.git\n'});
+  mod.refreshGit(due, ctx.cx);
+  await ctx.drain();
+  assert.equal(groups(mod)['ash/main'].repo, JSON.stringify(['ash', '/project/.git']));
+  assert.equal(documentValue(world, 'sprig-sidebar').spaces.main.git.commonDir, '/project/.git');
 });

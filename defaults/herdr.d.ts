@@ -28,6 +28,14 @@ export function readTextFile(path: string, options?: { on?: string | null }): Pr
  * Rejects on a stale snapshot; existing files are replaced atomically. */
 export function writeTextFile(path: string, text: string, expected: string | null): Promise<null>;
 
+/** Read a named JSON document from this core, or from `on` via this connection.
+ * A never-written document has value null and version 0; deletion retains its version. Rejects on RPC errors. */
+export function readDocument(name: string, options?: { on?: string | null }): Promise<{ value: unknown; version: number }>;
+/** Compare-and-set a document using a nonnegative safe integer version.
+ * On conflict, reads and returns the latest value and version; other errors reject.
+ * Both the write and conflict read share a 10-second deadline. */
+export function writeDocument(name: string, value: unknown, version: number, options?: { on?: string | null }): Promise<{ written: true; version: number } | { written: false; value: unknown; version: number }>;
+
 /** The agents people can start from a menu (entries with `run` in programs.json), most picked
  *  first, and whether each is installed: asked of the shell agents start in (on another machine,
  *  `on`, its login/interactive shell when supported), at most once a minute per machine.

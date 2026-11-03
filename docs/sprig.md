@@ -2,6 +2,59 @@
 
 Canonical source: https://github.com/JSRRosenbaum/grove-sprig (`main`).
 
+## Durable workspace grouping — 2026-11-03
+
+Sprig now persists repository membership in a separate `sprig-sidebar` document
+on each source core. No herdr-core source or protocol change is needed.
+The frontend exposes asynchronous `readDocument` / `writeDocument` to trusted
+mods over its current core connection; a reconnect replaces that connection.
+This feature needs the paired rebuilt frontend, not a mods-only installation.
+
+Document schema: `{schema: 1, spaces: {<source-local workspace ID>: {cwd, git}}}`,
+where `git` is null for a verified non-repository, or
+`{name, commonDir, linked}`. No frontend machine-name prefixes, selected pane,
+zoom, fold or herd state is stored. Repository identity scopes a group; closing
+its displayed parent does not delete the remaining worktrees.
+
+On connection, the document loads before cold Git discovery. Only entries with
+matching workspace/current cwd hydrate the sidebar; machine/core replacement
+invalidates frontend state. Newly verified discovery updates are version-merged
+into the source document, not copied wholesale from a stale frontend cache.
+Connected frontends reconcile every 15 seconds and on relevant workspace/path
+or discovery changes. A hierarchy snapshot must be read before the fresh source
+layout used for cleanup, preventing a stale layout from erasing another
+frontend's newly published workspace. Transient frontend omissions and offline
+machines never authorize deletion. Unknown schemas remain untouched.
+
+Validation: 53 Node consumer tests, 47 Python installer/consumer tests and 307
+Linux app tests passed. Three document API tests also executed successfully on
+Lappy's native Windows runtime. In an isolated native frontend/core session,
+actual external linked worktrees and a symlinked/nested checkout were persisted.
+Reopening a private frontend restored the hierarchy with identity Git queries
+disabled and **zero such calls**, preserving all six existing terminal IDs/PIDs.
+Closing the main workspace removed only its document entry, retaining both
+linked worktrees. Actual native mod calls exercised remote CAS conflict results,
+local/peer isolation and rejection of an invalid machine route.
+This is not a Windows full-suite, physical-input or end-to-end latency claim.
+
+The related garbled-first-paint report was reproduced in a private native session
+with added attach-reply latency. An initial 120x40 snapshot arrived after the
+local VT had already resized for the viewport, shifting/wrapping rows until the
+program repainted. A generic next-frame callback was still too early because
+the workspace mod can reveal its surface later. Initial attachment for a
+potentially visible pane now waits for its actual canvas prepaint; hidden tabs
+retain their subscriptions. The same fixture then attached at its measured
+68x21 geometry with the correct device-pixel cell and no follow-up resize on
+that stream; native screenshots showed correctly aligned rows from first paint.
+This fixes the reproduced initial-size race, not every possible remote delay or
+simultaneous resize by another viewer. No core change or arbitrary paint delay
+was added. The latency/proxy fixture is temporary, not a production profiler.
+
+Packages: https://github.com/JSRRosenbaum/grove-sprig/releases/tag/sprig-preview-2026.11.03.2.
+Only the frontend/customizations change; paired core, ConPTY and native
+annotation/review runtimes remain unchanged. Reopen frontends for activation,
+not cores or OMP sessions. Prior development releases remain immutable below.
+
 ## Sidebar discovery and Lappy paste profile — 2026-11-03
 
 The sidebar previously ran full `git status` scans serially, then separate
