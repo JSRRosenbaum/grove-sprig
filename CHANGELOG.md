@@ -1,5 +1,12 @@
 # Herdr changelog
 
+## Unreleased
+
+### Fixed
+- Create a new worktree with Enter without first naming it; blank names generate
+  a new branch, while explicit existing branch names still open that branch.
+  (#1, thanks @JSRRosenbaum)
+
 ## [sprig-preview-2026.11.03.2] - 2026-11-03
 
 ### New

@@ -115,7 +115,7 @@ export default class Worktree extends View {
     this.text = props()?.branch ?? "";
     this.list = undefined; // open: the checkouts, once read
     this.at = 0;
-    this.input = InputState.new({ value: this.text, placeholder: this.opening ? "filter worktrees" : "branch name" });
+    this.input = InputState.new({ value: this.text, placeholder: this.opening ? "filter worktrees" : "branch name (optional)" });
     this.input.on("change", (_e, cx) => { this.text = this.input.value(); this.error = ""; this.at = 0; cx.notify(); });
     this.input.on("submit", (_e, cx) => this.go(cx));
     this.inputFocused = true;
@@ -183,10 +183,10 @@ export default class Worktree extends View {
   }
 
   async create() {
-    const branch = this.text.trim();
-    if (!branch) return "Type a branch name.";
+    const requested = this.text.trim();
+    const branch = requested || `worktree-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
     const path = `${ROOT(this.userHome)}/${this.repo.name}/${slug(branch)}`;
-    const exists = (await git(this.repo.main, ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`], this.on)).ok;
+    const exists = requested && (await git(this.repo.main, ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`], this.on)).ok;
     const add = exists ? ["worktree", "add", path, branch] : ["worktree", "add", "-b", branch, path, "HEAD"];
     const r = await git(this.repo.top, add, this.on);
     if (!r.ok) return r.err || "git worktree add failed.";
@@ -320,7 +320,7 @@ export default class Worktree extends View {
             ? !r.linked
               ? "This is the repository's main checkout, not a worktree."
               : `Closes the space and deletes ${tilde(r.top, this.userHome)}. The branch stays.`
-            : `A new space on a checkout in ${tilde(ROOT(this.userHome), this.userHome)}/${r.name}/. A branch that exists is checked out; a new one starts from here.`;
+            : `A new space on a checkout in ${tilde(ROOT(this.userHome), this.userHome)}/${r.name}/. Leave the name blank to generate one. An existing branch is checked out; a new one starts from here.`;
     const blocked = !r || (remove && !r.linked);
     return v_flex()
       .id("worktree")
