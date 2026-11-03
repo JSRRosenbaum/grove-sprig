@@ -45,7 +45,7 @@ async function setup() {
       },
       shared: key => values.get(key), setShared: (key, value) => values.set(key, value),
       theme: () => ({dim: 'dim', foreground: 'fg', selected: 'selected', hover: 'hover', chrome: 'chrome', unknown: 'unknown'}),
-      window: () => ({active: false, layout_name: world.layout}), keys: () => world.keys, openOverlay: spec => calls.push({name: 'openOverlay', spec}), exec() {}, hc: args => world.hc(args), watchFolder() {}, nextCommand() {},
+      window: () => ({active: false, layout_name: world.layout}), keys: () => world.keys, openOverlay: spec => calls.push({name: 'openOverlay', spec}), exec: (...args) => world.exec(...args), hc: args => world.hc(args), watchFolder: () => new Promise(() => {}), nextCommand() {},
     },
   };
   const source = await readFile(new URL('./main.js', import.meta.url), 'utf8');
@@ -176,6 +176,102 @@ test('identical repository paths on distinct profiles remain separate', async ()
   const rows = mod.ordered(); assert.equal(rows.length, 2); assert.notEqual(rows[0].g.repo, rows[1].g.repo);
   mod.command(`repo-toggle:${encodeURIComponent(ga.value.repo)}`);
   assert.equal(mod.repoFolded.has(ga.value.repo), true); assert.equal(mod.repoFolded.has(gb.value.repo), false);
+});
+
+test('delayed repository discovery is bounded and publishes a complete hierarchy at once', async () => {
+  const {mod, world} = await setup();
+  const items = ['linked', 'other', 'main', 'extra1', 'extra2', 'extra3'].map(id => space(id, 'ash'));
+  world.spaces = items;
+  world.machines.push({name: 'ash', layout: 'ready'});
+  mod.machines = [{id: 'core-one', name: 'ash'}]; mod.inventory(items);
+  mod.shown = new Set(items.map(s => s.id));
+  const lookups = [];
+  let active = 0, peak = 0, task;
+  world.exec = (cmd, args, opts) => {
+    if (args[0] === 'rev-parse') {
+      active++; peak = Math.max(peak, active);
+      return new Promise(resolve => lookups.push({cwd: opts.cwd, finish() {
+        active--;
+        const common = ['/linked', '/main'].includes(opts.cwd) ? '/main/.git' : `${opts.cwd}/.git`;
+        resolve({code: 0, stdout: `${opts.cwd}\n${common}\n`});
+      }}));
+    }
+    throw new Error(`unexpected command ${cmd} ${args.join(' ')}`);
+  };
+  const cx = {spawn: fn => { task = fn(cx); }, notify() {}};
+  const order = () => Array.from(mod.ordered(), row => row.w.id);
+  const flush = () => new Promise(resolve => setImmediate(resolve));
+  mod.refreshGit(new Set(items.map(s => JSON.stringify([s.machine, s.folder]))), cx);
+  assert.equal(lookups.length, 4);
+  assert.deepEqual(order(), ['linked', 'other', 'main', 'extra1', 'extra2', 'extra3']);
+  lookups[0].finish(); await flush();
+  assert.equal(lookups.length, 5);
+  assert.deepEqual(order(), ['linked', 'other', 'main', 'extra1', 'extra2', 'extra3']);
+  for (let i = 1; i < 4; i++) lookups[i].finish();
+  await flush();
+  assert.equal(lookups.length, 6);
+  lookups[4].finish(); lookups[5].finish(); await flush();
+  assert.equal(peak, 4);
+  assert.deepEqual(order(), ['main', 'linked', 'other', 'extra1', 'extra2', 'extra3']);
+  await task;
+  assert.equal(mod.ordered()[0].g.repo, JSON.stringify(['ash', '/main/.git']));
+});
+
+test('machine identity changes invalidate discovery and retry transient failures', async () => {
+  const {mod, world} = await setup();
+  const item = space('main', 'ash'); world.spaces = [item];
+  world.machines.push({name: 'ash', layout: 'ready'});
+  mod.machines = [{id: 'old-core', name: 'ash'}]; mod.inventory(world.spaces);
+  mod.shown.add(item.id);
+  let fails = false, tasks = [];
+  world.exec = async (cmd, args) => {
+    if (fails) throw new Error('offline');
+    if (args[0] === 'rev-parse') return {code: 0, stdout: '/main\n/main/.git\n'};
+    throw new Error('unexpected command');
+  };
+  const cx = {spawn: fn => { tasks.push(fn(cx)); }, notify() {}};
+  const key = JSON.stringify(['ash', '/main']);
+  mod.refreshGit(new Set([key]), cx); await tasks.shift();
+  assert.equal(mod.ordered()[0].g.repo, JSON.stringify(['ash', '/main/.git']));
+  mod.machines = [{id: 'new-core', name: 'ash'}]; fails = true;
+  mod.inventory(world.spaces);
+  const due = mod.due(Date.now(), world.spaces, world.panes);
+  assert.equal(due.has(key), true);
+  assert.equal(mod.ordered()[0].g, null);
+  mod.refreshGit(due, cx); await tasks.shift();
+  assert.equal(mod.unsure.has(key), true);
+  fails = false;
+  mod.refreshGit(new Set([key]), cx); await tasks.shift();
+  assert.equal(mod.ordered()[0].g.repo, JSON.stringify(['ash', '/main/.git']));
+});
+
+test('nested and symlinked worktrees share only their own machine repository; nonrepos stay ungrouped', async () => {
+  const {mod, world} = await setup();
+  const linked = space('linked', 'ash'), main = space('main', 'ash');
+  const plain = space('plain', 'ash'), remote = space('remote', 'ash-other');
+  linked.folder = '/worktrees/feature/src'; main.folder = '/project/nested';
+  remote.folder = '/project/nested';
+  world.spaces = [linked, plain, main, remote];
+  world.machines.push({name: 'ash', layout: 'ready'}, {name: 'ash-other', layout: 'ready'});
+  mod.machines = [{id: 'one', name: 'ash'}, {id: 'two', name: 'ash-other'}];
+  mod.inventory(world.spaces); mod.shown = new Set(world.spaces.map(s => s.id));
+  let task;
+  world.exec = async (cmd, args, opts) => {
+    assert.equal(args[0], 'rev-parse');
+    if (opts.cwd === '/plain') return {code: 128, stderr: 'fatal: not a git repository'};
+    if (opts.cwd === linked.folder) return {code: 0, stdout: '/worktrees/feature\r\n/project/.git\r\n'};
+    return {code: 0, stdout: '/project\r\n/project/.git\r\n'};
+  };
+  const cx = {spawn: fn => { task = fn(cx); }, notify() {}};
+  mod.refreshGit(new Set(world.spaces.map(s => JSON.stringify([s.machine, s.folder]))), cx);
+  await task;
+  const rows = mod.ordered();
+  assert.deepEqual(Array.from(rows, row => row.w.id), ['main', 'linked', 'plain', 'remote']);
+  assert.equal(rows[0].g.repo, rows[1].g.repo);
+  assert.equal(rows[1].g.linked, true);
+  assert.equal(rows[2].g, null);
+  assert.notEqual(rows[0].g.repo, rows[3].g.repo);
+  assert.equal(mod.due(Date.now(), world.spaces, world.panes).has(JSON.stringify(['ash', '/plain'])), false);
 });
 
 test('switching back restores the exact still-live tab and pane', async () => {

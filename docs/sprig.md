@@ -2,6 +2,52 @@
 
 Canonical source: https://github.com/JSRRosenbaum/grove-sprig (`main`).
 
+## Sidebar discovery and Lappy paste profile — 2026-11-03
+
+The sidebar previously ran full `git status` scans serially, then separate
+top-level/common-directory/realpath queries for every workspace. The removed
+branch/ahead/behind values were no longer displayed. Partial discovery results
+could change grouping on unrelated redraws, producing a slowly reshuffling list.
+
+Discovery now uses one canonical `git rev-parse` query per folder, bounded to
+four concurrent lookups. A complete batch publishes together; transient failures
+retain retry semantics and machine/core identity changes invalidate old results.
+Windows CRLF output is normalized; no external Unix `realpath` is required.
+This changes presentation only: no repository or worktree is moved.
+
+Read-only probes of 18 actual Nix working directories found 17 sharing Athena's
+common Git directory; `athena-graph` is a distinct repository. Those local Git
+probes took about 35 ms on Nix, not an end-to-end Windows UI measurement.
+The isolated native sidebar rendered an external linked-worktree pair under a
+symlinked/nested main checkout while leaving another repository and machine
+namespace separate. Consumer tests cover delayed publication, bounded work,
+machine replacement/retry, canonical paths and Windows line endings.
+
+The owner explicitly changed Lappy's preference from Alt+V to Ctrl+V for
+frontend image/text paste. Its authored source is now
+`~/.config/herdr-app/legacy-profile.toml`; future installs must import that file,
+not the unchanged legacy-server config. Other shortcuts, commands, numbered-tab
+preferences and settings are preserved. Personal profiles are not shipped.
+
+Lappy's running Windows window loaded the new module and Ctrl+V profile without
+an app/core restart. Native screenshots and the live inspector confirmed rendering
+and repository groups; the final status had no file/mod errors. During SSH
+installation, inherited Owner Rights ACLs made Administrators-owned replacement
+files unreadable to the unelevated desktop app. Ownership of installer-owned
+files/directories and generated key metadata was restored to the existing
+desktop account, without broadening ACL grants. Install from the desktop user's
+context; an elevated SSH deployment must preserve that ownership.
+The Windows headless `check` command could not open a window in the SSH session;
+actual-window rendering, status and inspection were used instead. Physical
+Ctrl+V image input on Lappy remains a user check; its clipboard was not replaced
+and no synthetic input was sent to live agents. The same native paste action was
+previously exercised with text and PNGs in the isolated Linux frontend.
+
+Packages: https://github.com/JSRRosenbaum/grove-sprig/releases/tag/sprig-preview-2026.11.03.1.
+This is a customization-only update using the existing app/core/native runtimes;
+there is no native rebuild or core handover requirement. Older releases remain
+immutable below.
+
 ## Remote terminal paste repair — 2026-11-03
 
 The reported copy failure was actually paste: Auri and Ash selections reached

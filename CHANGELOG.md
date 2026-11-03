@@ -1,5 +1,17 @@
 # Herdr changelog
 
+## [sprig-preview-2026.11.03.1] - 2026-11-03
+
+### Fixed
+- Discover repository/worktree groups with bounded lightweight Git queries
+  instead of serial status scans, then publish each discovery batch together
+  so the sidebar does not reshuffle one completed lookup at a time.
+  (#1, thanks @JSRRosenbaum)
+- Handle Windows line endings in repository paths without requiring a separate
+  Unix `realpath` command. (#1, thanks @JSRRosenbaum)
+
+Customization-only update; native app/core binaries are unchanged.
+
 ## [sprig-preview-2026.11.03] - 2026-11-03
 
 ### Fixed
