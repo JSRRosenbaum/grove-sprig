@@ -159,12 +159,27 @@ Use `--app-home` / `--agent-home` for explicit alternate installation roots.
   Explicit reorder intent survives optimistic model updates and late write conflicts;
   it is retired only when the core-acknowledged order matches. Per-window machine
   section order is never imposed globally on the core.
-- Repository hierarchy is read-only presentation, not a filesystem migration.
-  One canonical `git rev-parse` query identifies each folder; at most four
-  discoveries run concurrently and each completed batch publishes together.
-  No full `git status` scan or separate `realpath` utility is needed. Linked
-  worktrees outside the main checkout still group by their shared Git directory;
+- Repository hierarchy is presentation, not a filesystem migration. Repository
+  membership is stored by unqualified workspace ID in the source core's
+  `sprig-sidebar` document, separate from the built-in `herdr-app` layout.
+  A reopened frontend restores matching checkout paths before Git discovery;
+  other frontends share these facts, not this window's selection or fold state.
+  Unknown folders still use one canonical `git rev-parse`, at most four at once.
+  No full `git status` scan or separate `realpath` utility is needed.
+  Linked worktrees outside the main checkout group by their shared Git directory;
   distinct repositories and machine/core profiles remain separate.
+- Hierarchy reads reconcile every 15 seconds while connected, or after a workspace,
+  path, acknowledged order or discovery change. Writes compare document versions
+  and merge on conflict. A fresh source-core layout, read after the hierarchy,
+  determines which workspace records may be removed; an offline or incomplete
+  frontend list never proves deletion. Closing the displayed parent retains
+  surviving group members. Cached non-repository results receive bounded
+  revalidation; malformed/unknown schemas are left unchanged.
+- This persistence feature requires the paired rebuilt Sprig frontend, which
+  exposes asynchronous `readDocument` / `writeDocument` to mods over its existing
+  core connection. **Do not install these new mods alone into an older frontend.**
+  No herdr-core modification or core restart is required. Updating the frontend
+  does require reopening its windows; keep the user's authored key profiles.
 - `w1`, `w2`, … are persistent **display aliases**, not core/API workspace IDs.
   They remain bound to the full machine-profile/space identity across row reordering,
   reload, and profile rename. Separate profiles on one host are not merged.

@@ -1,5 +1,25 @@
 # Herdr changelog
 
+## [sprig-preview-2026.11.03.2] - 2026-11-03
+
+### New
+- Remember workspace repository/worktree groups in each source core so other
+  Sprig frontends and reopened windows can restore the hierarchy without
+  rediscovering every checkout. No herdr-core upgrade is required.
+  (#1, thanks @JSRRosenbaum)
+- Share hierarchy updates with version-checked merges; closing a workspace
+  removes its record without orphaning surviving worktrees. Disconnected
+  machines keep their metadata. (#1, thanks @JSRRosenbaum)
+
+### Fixed
+- Measure a visible pane before its initial terminal attachment, preventing an
+  old-size snapshot from being decoded at the new viewport width and then
+  corrected by another resize/repaint. Hidden tabs remain attached.
+  (#1, thanks @JSRRosenbaum)
+
+Requires the matching Sprig frontend and customization bundle; the core,
+ConPTY and native annotation/review runtimes are unchanged.
+
 ## [sprig-preview-2026.11.03.1] - 2026-11-03
 
 ### Fixed

@@ -468,6 +468,7 @@ pub struct AppWindow {
 
 impl AppWindow {
     pub fn new(core: Arc<Core>, requests: async_channel::Receiver<Request>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        mods::publish_document_core(core.clone());
         let runtime = ShellRuntime::new(cx).map_err(|e| tracing::error!("script runtime failed, mods are off: {e:#}")).ok();
         mods::note_fonts(cx);
         let seen = std::fs::read_to_string(state_file("seen.json")).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
@@ -914,6 +915,7 @@ impl AppWindow {
         }
         Self::note_core(&core);
         self.core = core.clone();
+        mods::publish_document_core(core.clone());
         self.publish(cx);
         for t in self.terms.values() {
             t.view.update(cx, |v, cx| v.reattach(core.clone(), cx));
@@ -1492,6 +1494,7 @@ impl AppWindow {
         let (model, live) = (&self.model, &self.live);
         self.swapped.retain(|p, a| model.address_of(p).is_some() && live.contains_key(a));
         let (mut terms, mods_visible) = self.visible();
+        let visible_count = terms.len();
         // Every tab's terminals stay attached (only visible ones are drawn): tab
         // switches are instant and kitty images survive, which a repaint can't bring back.
         for c in self.model.tabs() {
@@ -1504,14 +1507,18 @@ impl AppWindow {
             }
         }
         let want_terms: HashSet<String> = terms.iter().map(|(id, _)| id.clone()).collect();
-        for (id, address) in terms {
-            if self.terms.get(&id).is_some_and(|t| t.address == address) {
+        for (index, (id, address)) in terms.into_iter().enumerate() {
+            // Selection may precede the mod's workspace surface becoming visible.
+            // Wait for actual prepaint for that tab, not merely another frame.
+            let wait_for_layout = index < visible_count || self.model.active_tab().is_none_or(|tab| tab.shown().find(&id).is_some());
+            if let Some(t) = self.terms.get(&id).filter(|t| t.address == address) {
+                if !wait_for_layout && t.view.read(cx).waiting_for_layout { t.view.update(cx, |view, cx| view.attach_pending(cx)); }
                 continue;
             }
             let rec = self.live.get(&address);
             let dim = |k: &str, d: u64| rec.and_then(|r| r.get(k)).and_then(Value::as_u64).unwrap_or(d) as u16;
             let size_hint = (dim("cols", 120), dim("rows", 40));
-            let view = cx.new(|cx| TerminalView::attach(self.core.clone(), address.clone(), size_hint, cx));
+            let view = cx.new(|cx| TerminalView::attach(self.core.clone(), address.clone(), size_hint, wait_for_layout, cx));
             self.tell_term(&view, &address, cx);
             let (block, addr) = (id.clone(), address.clone());
             let sub = cx.subscribe_in(&view, window, move |this, _, ev: &TerminalEvent, window, cx| match ev {
