@@ -1,5 +1,12 @@
 # Herdr changelog
 
+## Unreleased
+
+### Fixed
+- Create a new worktree with Enter without first naming it; blank names generate
+  a new branch, while explicit existing branch names still open that branch.
+  (#1, thanks @JSRRosenbaum)
+
 ## Sprig upstream integration — 2026-11-06
 
 - Rebased Sprig onto upstream herdr-app `cfcf836` (released 0.1.13 plus reviewed
