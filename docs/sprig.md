@@ -2,6 +2,52 @@
 
 Canonical source: https://github.com/JSRRosenbaum/grove-sprig (`main`).
 
+## Three-host deployment — 2026-11-02
+
+The owner authorized deployment of code commit `6c182c1` to Nix, Rowan and Ash,
+and explicitly approved reopening the Rowan frontend. App, paired core, native
+annotation/review runtimes and effective host key profiles are installed on all
+three. Runtime names and state identities remain `herdr-app`/`herdr-core`.
+
+| Host | Frontend state after deployment | Existing live terminal PIDs preserved |
+|---|---|---:|
+| Nix | Installed; no production GUI launched | 51 |
+| Rowan | Updated window 2 reopened and verified | 24 |
+| Ash | Installed; no production GUI launched | 15 |
+
+Only planned `hc update --from` handovers changed production core server PIDs.
+All existing terminal addresses and process identities survived. Rowan also
+retained all 24 observed TTYs; its workspace, tab, pane, zoom, 49 existing sidebar
+aliases and both herds were preserved. Older holders remain intentionally alive.
+Nix's existing bundled loader/runtime is retained for its NixOS environment;
+the four deployed ELF files have the same qualified hashes on every host.
+Nix's registered `rowan` logical core ID matches the authoritative Rowan ID.
+Its `auri` connection is target `ash`, core session `auri`, not an SSH host
+called Auri.
+
+Installed runtimes reported versions, native mod checks passed, and actual
+isolated `terminal.clear` RPC checks on all hosts removed an old marker while
+retaining the cursor line. Owned smoke cores/displays were cleaned up.
+The live Rowan GUI rendered without reported configuration/mod errors.
+Nix/Ash desktop interaction was not exercised.
+
+After the owner reported the tab-name prompt, Rowan's authored profile was set
+to `[ui] prompt_new_tab_name = false` and reloaded without changing bindings.
+Cua-delivered prefix+c in an isolated matching profile created numbered tab 2
+with no prompt. Keep this preference on future Rowan installs by passing
+`--legacy-config ~/.config/herdr-app/legacy-profile.toml`; do not reimport the
+retired snapshot/defaults over the owner's newer choice. Ash already disables
+the prompt; Nix retains its own imported local preference.
+
+Rollback/evidence:
+`~/.local/state/herdr-app/sprig-deploy-6c182c1/` on Rowan;
+`~/.local/state/herdr-app/sprig-deploy-6c182c1-01a19f1e/` on Nix/Ash.
+The central private payload/receipt directory is
+`/mnt/tank/AppCaches/rowan-dev/sprig-deploy-20261102-6c182c1/`.
+Rollback launchers/configuration only as needed; never overwrite progressed
+conversation, core or view state with old snapshots.
+
+
 ## Background workspace focus repair — 2026-11-02
 
 CLI `space.new` now creates structure without selecting it in the addressed
