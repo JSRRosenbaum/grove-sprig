@@ -2,6 +2,31 @@
 
 Canonical source: https://github.com/JSRRosenbaum/grove-sprig (`main`).
 
+## Downloadable development snapshot — 2026-11-02
+
+Packages: https://github.com/JSRRosenbaum/grove-sprig/releases/tag/sprig-preview-2026.11.02
+
+This unsigned, unofficial development snapshot distributes the existing
+Ash-built code `6c182c1`; subsequent source commits update documentation only.
+Linux x86-64 and Windows x64 bundles include the paired core, native review and
+annotation runtimes, customizations, licenses, SHA-256 manifests and installation
+instructions. No personal key profiles, machine records or credentials ship.
+The binaries retain their upstream executable names/version metadata.
+
+The Linux app requires glibc 2.44; this is not a portable older-distribution or
+standalone NixOS package. Windows bundles retain the pinned ConPTY directory
+layout and static CRT linkage. Set `prompt_new_tab_name=false` in the user's
+authored legacy profile when compiling customizations; preserve host-specific
+keys rather than importing another machine's profile.
+
+This is **not release-qualified**: the latest Windows artifact has not executed
+on Windows, physical Windows desktop checks remain pending, and GitHub Actions
+is disabled for this repository. Do not treat older Windows test passes or an
+empty check list as qualification. Integration into `main` is tracked in
+https://github.com/JSRRosenbaum/grove-sprig/pull/1; do not bypass its CI gate.
+There are no macOS or ARM builds in this snapshot. Official Herdr installers and
+auto-update channels do not select Sprig's development assets.
+
 ## Three-host deployment — 2026-11-02
 
 The owner authorized deployment of code commit `6c182c1` to Nix, Rowan and Ash,
