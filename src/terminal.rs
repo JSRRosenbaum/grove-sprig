@@ -622,28 +622,20 @@ impl TerminalView {
         }
     }
 
-    /// Ctrl+V: a remote image, clipboard text on Windows, or the key itself.
+    /// The configured image-paste key: transfer a remote image, paste remote
+    /// clipboard text, or leave local Unix Ctrl+V with the program.
     pub fn paste_image(&mut self, cx: &mut Context<Self>) {
-        if self.send_image(cx) {
+        let remote = self.address.contains('/');
+        let item = if remote || cfg!(windows) { cx.read_from_clipboard() } else { None };
+        if remote && let Some(path) = item.as_ref().and_then(image_file) {
+            self.put_there(vec![path], true, cx);
             return;
         }
-        let text = if cfg!(windows) { cx.read_from_clipboard().and_then(|c| c.text()) } else { None };
-        let bytes = paste_image_fallback(&mut self.grid.borrow_mut().vt, text.as_deref());
+        let text = item.as_ref().and_then(ClipboardItem::text);
+        let bytes = paste_image_fallback(&mut self.grid.borrow_mut().vt, text.as_deref(), remote);
         if let Some(bytes) = bytes {
             self.send(&bytes);
         }
-    }
-
-    /// An agent on another machine reads that machine's clipboard, so this
-    /// one's image goes there as a file, and its path is pasted. A local
-    /// program reads the clipboard itself: nothing to do.
-    fn send_image(&self, cx: &mut Context<Self>) -> bool {
-        if !self.address.contains('/') {
-            return false;
-        }
-        let Some(path) = cx.read_from_clipboard().and_then(|item| image_file(&item)) else { return false };
-        self.put_there(vec![path], true, cx);
-        true
     }
 
     /// Copies the selection to the clipboard (and the primary selection on Linux).
@@ -1277,9 +1269,10 @@ fn fallback_icon(text: &str, font: &Font, ts: &gpui::TextSystem) -> Option<IconG
     icon_glyph(c)
 }
 
-fn paste_image_fallback(vt: &mut vt::Vt, text: Option<&str>) -> Option<Vec<u8>> {
-    // Windows console programs expect the terminal to paste clipboard text.
-    if cfg!(windows) && let Some(text) = text {
+fn paste_image_fallback(vt: &mut vt::Vt, text: Option<&str>, remote: bool) -> Option<Vec<u8>> {
+    // A remote program cannot read this frontend's clipboard. Local Unix
+    // programs still own Ctrl+V; Windows consoles expect terminal-side paste.
+    if (remote || cfg!(windows)) && let Some(text) = text {
         return Some(vt.paste_bytes(text));
     }
     let keystroke = Keystroke::parse("ctrl-v").ok()?;
@@ -3396,14 +3389,17 @@ mod tests {
 
 
     #[test]
-    fn ctrl_v_clipboard_text_follows_platform_paste_convention() {
+    fn ctrl_v_pastes_frontend_text_remotely_without_stealing_local_unix_input() {
         let mut vt = Vt::new(20, 3);
-        assert_eq!(super::paste_image_fallback(&mut vt, None).unwrap(), b"\x16");
-        for bracketed in [false, true] {
-            vt.write(if bracketed { b"\x1b[?2004h" } else { b"\x1b[?2004l" });
-            let bytes = super::paste_image_fallback(&mut vt, Some("paste-probe")).unwrap();
-            let expected = if cfg!(windows) { vt.paste_bytes("paste-probe") } else { vec![0x16] };
-            assert_eq!(bytes, expected);
+        for remote in [false, true] {
+            assert_eq!(super::paste_image_fallback(&mut vt, None, remote).unwrap(), b"\x16");
+            for bracketed in [false, true] {
+                vt.write(if bracketed { b"\x1b[?2004h" } else { b"\x1b[?2004l" });
+                let text = "paste café\nsecond line";
+                let bytes = super::paste_image_fallback(&mut vt, Some(text), remote).unwrap();
+                let expected = if remote || cfg!(windows) { vt.paste_bytes(text) } else { vec![0x16] };
+                assert_eq!(bytes, expected);
+            }
         }
     }
 

@@ -1,5 +1,6 @@
 # Herdr changelog
 
+<<<<<<< HEAD
 ## Sprig upstream integration — 2026-11-06
 
 - Rebased Sprig onto upstream herdr-app `cfcf836` (released 0.1.13 plus reviewed
@@ -9,6 +10,20 @@
   sidebar, durable repository/worktree grouping, prompt-free New worktree and
   remote clipboard paste on the new upstream base.
 - Source pins are recorded in `sprig/upstreams.json`.
+=======
+## [sprig-preview-2026.11.03] - 2026-11-03
+
+### Fixed
+- Paste frontend clipboard text into remote terminals instead of sending a
+  Ctrl+V keystroke to a program that cannot read that clipboard. Remote image
+  transfer and local Unix Ctrl+V behavior remain unchanged.
+  (#1, thanks @JSRRosenbaum)
+- Restore Ctrl+Shift+V terminal paste in the legacy layout without overriding
+  an explicitly assigned legacy shortcut. (#1, thanks @JSRRosenbaum)
+
+Unsigned development snapshot; Windows runtime/desktop checks and repository
+CI qualification remain pending.
+>>>>>>> 970a491 (fix: paste frontend clipboard text into remote terminals)
 
 ## [sprig-preview-2026.11.02] - 2026-11-02
 
