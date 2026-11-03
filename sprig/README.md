@@ -159,6 +159,12 @@ Use `--app-home` / `--agent-home` for explicit alternate installation roots.
   Explicit reorder intent survives optimistic model updates and late write conflicts;
   it is retired only when the core-acknowledged order matches. Per-window machine
   section order is never imposed globally on the core.
+- Repository hierarchy is read-only presentation, not a filesystem migration.
+  One canonical `git rev-parse` query identifies each folder; at most four
+  discoveries run concurrently and each completed batch publishes together.
+  No full `git status` scan or separate `realpath` utility is needed. Linked
+  worktrees outside the main checkout still group by their shared Git directory;
+  distinct repositories and machine/core profiles remain separate.
 - `w1`, `w2`, … are persistent **display aliases**, not core/API workspace IDs.
   They remain bound to the full machine-profile/space identity across row reordering,
   reload, and profile rename. Separate profiles on one host are not merged.
@@ -257,9 +263,23 @@ opens the searchable guide; the centered font-ratio control remains at the botto
 The guide resolves terminal > current layout > global bindings, labels mod-only
 bindings, and searches readable action names as well as shortcut text.
 
-Explicit reload, resize mode, worktree/workthreads and annotation/plugin commands
-remain unported rather than being assigned unrelated substitutes. Configuration
-edits still hot-reload normally.
+The legacy compiler also routes reload, resize mode, worktree/Workthreads and
+annotation/plugin actions to their native/core implementations. Configuration
+edits hot-reload normally.
+
+### Clipboard shortcuts
+
+Set `remote_image_paste = "Ctrl+V"` in the existing `[keys]` table of your
+authored legacy profile and re-run `sprig/install.py --legacy-config <profile>`.
+Use the frontend's profile, not another machine's clipboard or key configuration.
+On Lappy, `~/.config/herdr-app/legacy-profile.toml` is the authored source; its
+Ctrl+V assignment replaces the former Alt+V assignment without keeping an alias.
+
+The configured action transfers clipboard images to remote terminals and pastes
+frontend clipboard text there otherwise. Windows local text paste is terminal-side;
+local Unix Ctrl+V remains the program's key. Ctrl+Shift+V supplies terminal-side
+paste unless an explicit legacy shortcut already owns it. An imported custom
+Alt+V binding is a profile choice, not a requirement for image paste.
 
 Keyboard qualification on 2026-10-31 used the actual Ash-built native app on a
 private Sway/XWayland display: Ctrl+Space held beyond one second; `f` and `?`

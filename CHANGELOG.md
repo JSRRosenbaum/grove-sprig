@@ -1,6 +1,5 @@
 # Herdr changelog
 
-<<<<<<< HEAD
 ## Sprig upstream integration — 2026-11-06
 
 - Rebased Sprig onto upstream herdr-app `cfcf836` (released 0.1.13 plus reviewed
@@ -10,7 +9,19 @@
   sidebar, durable repository/worktree grouping, prompt-free New worktree and
   remote clipboard paste on the new upstream base.
 - Source pins are recorded in `sprig/upstreams.json`.
-=======
+
+## [sprig-preview-2026.11.03.1] - 2026-11-03
+
+### Fixed
+- Discover repository/worktree groups with bounded lightweight Git queries
+  instead of serial status scans, then publish each discovery batch together
+  so the sidebar does not reshuffle one completed lookup at a time.
+  (#1, thanks @JSRRosenbaum)
+- Handle Windows line endings in repository paths without requiring a separate
+  Unix `realpath` command. (#1, thanks @JSRRosenbaum)
+
+Customization-only update; native app/core binaries are unchanged.
+
 ## [sprig-preview-2026.11.03] - 2026-11-03
 
 ### Fixed
@@ -23,7 +34,6 @@
 
 Unsigned development snapshot; Windows runtime/desktop checks and repository
 CI qualification remain pending.
->>>>>>> 970a491 (fix: paste frontend clipboard text into remote terminals)
 
 ## [sprig-preview-2026.11.02] - 2026-11-02
 

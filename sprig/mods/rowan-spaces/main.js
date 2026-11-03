@@ -28,7 +28,7 @@ export function tone(t, status) {
 
 export default class Spaces extends View {
   init(_props, cx) {
-    this.git = {}; this.checked = {}; this.unsure = new Set(); this.pending = new Set();
+    this.git = {}; this.checked = {}; this.unsure = new Set(); this.pending = new Set(); this.inFlight = new Set(); this.gitMachine = {};
     this.busy = {}; this.ready = {}; this.at = {}; this.watching = new Set();
     this.shown = new Set(spaces().map(s => s.id)); this.born = {}; this.machines = [];
     this.handle = cx.focus_handle();
@@ -426,7 +426,13 @@ export default class Spaces extends View {
     const at = {};
     for (const s of sp) at[s.id] = where(s, ps);
     const keys = new Set(Object.values(at).filter((k) => JSON.parse(k)[1]));
-    const due = new Set([...keys].filter((k) => !(k in this.git)));
+    for (const k of keys) {
+      const on = JSON.parse(k)[0], identity = this.machineKey(on);
+      if (k in this.gitMachine && this.gitMachine[k] !== identity) {
+        delete this.git[k]; delete this.checked[k]; delete this.gitMachine[k]; this.unsure.delete(k);
+      }
+    }
+    const due = new Set([...keys].filter((k) => !(k in this.git) && !this.inFlight.has(k) && !this.pending.has(k)));
     for (const [id, k] of Object.entries(at)) if (this.at[id] && this.at[id] !== k && keys.has(k)) due.add(k);
     this.at = at;
     const spaceOf = {};
@@ -446,13 +452,13 @@ export default class Spaces extends View {
     if (window()?.active) {
       for (const k of keys) {
         const asks = this.git[k] || this.unsure.has(k);
-        if (asks && !this.folded.has(JSON.parse(k)[0]) && now - (this.checked[k] ?? 0) > FALLBACK) due.add(k);
+        if (asks && !this.inFlight.has(k) && !this.pending.has(k) && !this.folded.has(JSON.parse(k)[0]) && now - (this.checked[k] ?? 0) > FALLBACK) due.add(k);
       }
     }
     return due;
   }
 
-  // `key` and the other places in its repo (a commit there moves their ahead/behind).
+  // Places sharing a repository may need rediscovery after a worktree operation.
   sameRepo(key, keys) {
     const repo = this.git[key]?.repo;
     return [key, ...(repo ? [...keys].filter((k) => this.git[k]?.repo === repo) : [])];
@@ -502,7 +508,7 @@ export default class Spaces extends View {
     });
   }
 
-  // One look at a time, each place once however often it was asked for meanwhile.
+  // Publish a complete discovery batch rather than moving worktrees one by one.
   refreshGit(keys, cx) {
     for (const k of keys) this.pending.add(k);
     if (this.refreshing) return;
@@ -511,7 +517,28 @@ export default class Spaces extends View {
       while (this.pending.size) {
         const keys = [...this.pending];
         this.pending.clear();
-        for (const key of keys) await this.check(key, cx);
+        keys.forEach(k => this.inFlight.add(k));
+        const results = new Array(keys.length);
+        let next = 0;
+        await Promise.all(Array.from({length: Math.min(4, keys.length)}, async () => {
+          for (;;) {
+            const i = next++;
+            if (i >= keys.length) return;
+            results[i] = await this.identify(keys[i]);
+          }
+        }));
+        for (let i = 0; i < keys.length; i++) {
+          const key = keys[i], result = results[i], on = JSON.parse(key)[0];
+          if (result.machine !== this.machineKey(on)) { this.pending.add(key); continue; }
+          this.checked[key] = Date.now();
+          this.gitMachine[key] = result.machine;
+          if (result.unsure) this.unsure.add(key); else this.unsure.delete(key);
+          if (result.info !== undefined) this.git[key] = result.info;
+          else this.git[key] ??= null;
+          if (result.info && !on) this.watch(JSON.parse(result.info.repo)[1], cx);
+        }
+        cx.notify();
+        keys.forEach(k => this.inFlight.delete(k));
       }
       const used = new Set(Object.values(this.git).filter(Boolean).map((g) => JSON.parse(g.repo)).filter(([on]) => !on).map(([, repo]) => repo));
       for (const repo of this.watching) if (!used.has(repo)) this.watching.delete(repo);
@@ -520,44 +547,25 @@ export default class Spaces extends View {
     });
   }
 
-  // One place's git: branch, ahead/behind, its repo.
-  async check(key, cx) {
-    const [on, cwd] = JSON.parse(key);
-    this.checked[key] = Date.now();
-    this.unsure.delete(key);
+  // Repository identity does not require scanning a worktree's status.
+  async identify(key) {
+    const [on, cwd] = JSON.parse(key), machine = this.machineKey(on);
     try {
-      // No optional locks: a status that touched the index would wake the watch again.
-      const r = await exec("git", ["--no-optional-locks", "status", "--porcelain=v2", "--branch"], { cwd, on });
-      if (r.code !== 0) {
-        // Only git's own "no" is remembered as no repo; anything else is asked again.
-        if (!/not a git repository/i.test(r.stderr)) this.unsure.add(key);
-        this.git[key] = null;
-        return;
-      }
-      // The repo's own .git folder names it; a worktree's top differs from it.
-      const top = await exec("git", ["rev-parse", "--show-toplevel"], { cwd, on });
-      const common = await exec("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], { cwd, on });
-      const resolved = common.code === 0 ? await exec("realpath", [common.stdout.trim()], { on }) : null;
-      if (!resolved || resolved.code !== 0 || top.code !== 0) { this.unsure.add(key); return; }
-      const repo = resolved.stdout.trim();
+      const r = await exec("git", ["rev-parse", "--path-format=absolute", "--show-toplevel", "--git-common-dir"], { cwd, on });
+      if (r.code !== 0)
+        return /not a git repository/i.test(r.stderr) ? {machine, info: null} : {machine, unsure: true};
+      // Git's absolute path format is canonical; no separate realpath process
+      // is needed (and that Unix utility is not available on every Windows host).
+      const [top, repo] = r.stdout.trim().split(/\r?\n/).map(line => line.trim());
+      if (!top || !repo) return {machine, unsure: true};
       const name = repo.endsWith("/.git") ? base(repo.slice(0, -5)) : base(repo).replace(/\.git$/, "");
-      const info = { name, branch: null, ahead: 0, behind: 0, repo: JSON.stringify([on, repo]), linked: repo !== `${top.stdout.trim()}/.git` };
-      for (const line of r.stdout.split("\n")) {
-        if (line.startsWith("# branch.head ")) info.branch = line.slice(14);
-        else if (line.startsWith("# branch.ab ")) {
-          const [a, b] = line.slice(12).split(" ");
-          info.ahead = Math.abs(parseInt(a, 10)) || 0;
-          info.behind = Math.abs(parseInt(b, 10)) || 0;
-        }
-      }
-      this.git[key] = info;
-      if (!on) this.watch(repo, cx);
+      const info = { name, repo: JSON.stringify([on, repo]), linked: repo !== `${top}/.git` };
+      return {machine, info};
     } catch {
-      // Couldn't ask (the machine is away): keep what it showed, look again later.
-      this.git[key] ??= null;
-      this.unsure.add(key);
+      return {machine, unsure: true};
     }
   }
+
 
   watch(repo, cx) {
     if (this.watching.has(repo)) return;
