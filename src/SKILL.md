@@ -102,6 +102,13 @@ worker. Use app commands when the
 user wants to see a new tab or split, hc for orchestration that need not change
 the screen.
 
+`terminal.paste` sends the frontend clipboard to the focused terminal, local or
+remote. The configured image-paste key transfers remote images and pastes
+frontend text remotely; local Unix Ctrl+V remains the program's key. In the
+legacy layout, Ctrl+Shift+V supplies terminal-side paste unless explicitly
+assigned by the legacy profile. A remote program cannot read the frontend's
+clipboard simply by receiving Ctrl+V.
+
 ## Customize layouts, keys, or mods
 
 First read `~/.config/herdr-app/AGENTS.md` (or `$HERDR_APP_HOME/AGENTS.md` if

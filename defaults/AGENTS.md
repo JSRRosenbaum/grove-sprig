@@ -588,10 +588,12 @@ The main ones:
   `terminal.peek {terminal}` (peek over the tab, with keep-as-tab and close),
   `terminal.show {terminal?, pane?}`, `terminal.copy`, `terminal.paste` (copied
   files, such as Finder's or a clipboard manager's image, as if dropped; an image
-  alone as `terminal.paste_image` pastes it), `terminal.paste_image` (Ctrl+V: an
-  image, into a terminal on another machine: copied there, its path pasted; on
-  Windows, clipboard text is pasted; otherwise Ctrl+V goes to the program, which
-  reads the clipboard itself). TIFF and BMP clipboard
+  alone as `terminal.paste_image` pastes it), `terminal.paste_image` (the configured
+  image-paste key: an image for a remote terminal is copied there and its path
+  pasted; otherwise frontend clipboard text is pasted remotely or on Windows.
+  Local Unix Ctrl+V still goes to the program, which reads its own clipboard).
+  The legacy layout supplies Ctrl+Shift+V for terminal-side paste unless the
+  legacy profile explicitly assigns that chord. TIFF and BMP clipboard
   images are converted to PNG before sending,
   `terminal.copy_mode` enters keyboard scrollback selection; `terminal.clear` clears
   authoritative primary-screen history above the wrapped cursor line without sending

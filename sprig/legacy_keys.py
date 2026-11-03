@@ -233,6 +233,9 @@ def compile_profile(defaults, config_path=None, validate_local_dependencies=True
                 else:
                     raise ValueError(f'Unsupported legacy custom command type: {typ}')
                 register(f'command[{number}].key', command.get('key', ''), action)
+    # The old outer terminal owned this paste chord. The native frontend must
+    # provide it, but an explicitly assigned legacy shortcut still wins.
+    register('terminal_paste', 'Ctrl+Shift+V', 'terminal.paste')
     for prefix in prefixes:
         layout[prefix + ' escape'] = 'legacy.prefix_cancel'
         for repeated in prefixes:

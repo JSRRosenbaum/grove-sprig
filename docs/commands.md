@@ -409,7 +409,7 @@ No arguments.
 
 ## `terminal.paste_image`
 
-Ctrl+V: the clipboard's image as a file on the focused terminal's machine, when that's another one; on Windows, paste clipboard text; otherwise Ctrl+V goes to the terminal.
+The configured image-paste key: transfer an image to a remote terminal's machine, otherwise paste frontend clipboard text remotely or on Windows; local Unix Ctrl+V goes to the program.
 
 No arguments.
 

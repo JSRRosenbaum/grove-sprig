@@ -2,6 +2,29 @@
 
 Canonical source: https://github.com/JSRRosenbaum/grove-sprig (`main`).
 
+## Remote terminal paste repair — 2026-11-03
+
+The reported copy failure was actually paste: Auri and Ash selections reached
+Rowan's regular clipboard (Ash also reached PRIMARY), but Ctrl+V sent only
+byte `16` to remote terminal input. A remote program cannot read the frontend's
+clipboard. The legacy key map also omitted Ctrl+Shift+V, previously supplied by
+the outer terminal emulator.
+
+The configured image-paste action now sends frontend text to remote terminals
+using their active bracketed-paste mode. Image transfer remains intact; local
+Unix Ctrl+V still goes to the program. Ctrl+Shift+V is a fallback in imported
+legacy profiles, with explicit legacy assignments retaining precedence.
+
+An owned isolated native frontend, Cua keyboard events and a raw remote input
+recorder demonstrated the failure before repair and exact Unicode/multiline
+input afterward, with bracketed paste both off and on. Local Ctrl+V/Ctrl+Shift+V
+and actual remote PNG transfer were also exercised. This is not a Windows
+runtime qualification claim.
+
+Updated packages:
+https://github.com/JSRRosenbaum/grove-sprig/releases/tag/sprig-preview-2026.11.03.
+The prior snapshot below is retained unchanged.
+
 ## Downloadable development snapshot — 2026-11-02
 
 Packages: https://github.com/JSRRosenbaum/grove-sprig/releases/tag/sprig-preview-2026.11.02
