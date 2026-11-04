@@ -15,28 +15,51 @@ for installed-state compatibility; a second fork checkout is no longer needed.
 
 - Herdr and herdr-core installed and working. Built from Herdr 0.1.7's shipped layouts
   and mods.
+- Python 3.11 or newer for the installer and its TOML configuration reader.
 - Git, used by the Files, Changes, Spaces, and worktree panels.
 - Fira Code for the intended terminal and interface typography. It is not bundled; Herdr uses
   its available fallback fonts when it is missing.
 
-The layout carries its own Dracula colors, fonts, and terminal padding. Installing it does
-not require replacing your global settings or keybindings.
+The layout carries its own Dracula colors, fonts, and terminal padding. The
+legacy profile deliberately replaces global and terminal key scopes; the
+previous `keys.json` is backed up for restoration.
 
 ## Install
 
 From the **Sprig repository root**:
 
 ```sh
-python3 sprig/install.py
+python3 sprig/install.py --legacy-config /path/to/original/herdr/config.toml
 herdr-app do layout.switch --name rowan-terminal
 ```
 
 See the [root installation guide](../README.md#install-or-update-sprig-customizations)
 for alternate configuration roots, backups and the update/rollback contract.
-The installer includes all eleven mods used by `rowan-terminal`; it does not
-overwrite global settings or install the author's personal snapshots in
-`settings.json` / `keys.json`. It preserves existing global and terminal keys
-and seeds platform defaults when `keys.json` is missing.
+The installer compiles the original Herdr defaults and your TOML overrides into
+the Rowan legacy profile. If `--legacy-config` is omitted, it discovers a local
+Herdr config only when the location is unambiguous; without one, original
+defaults are used. The selected file remains on your machine. It replaces the
+Rowan layout, global, terminal, and Rowan Navigate key scopes to avoid newer
+shortcuts intercepting keys intended for terminal programs. Other key sections,
+settings, credentials, and state are preserved. Unsupported commands and
+missing local absolute command dependencies stop installation before changes.
+For remote source machines, pass `--legacy-machine-config NAME=PATH` once per
+machine, using its exact core machine profile name and a local copy of that
+machine's original TOML. By default, normal shortcuts and prefix come from the
+frontend configuration; custom commands come from the focused source machine.
+An unconfigured remote machine retains frontend normal keys but has no custom
+commands. Use `--legacy-key-source server` to select each source machine's full
+key profile instead. Remote command dependencies are checked on the source
+machine when invoked, not against the frontend's filesystem. Source TOML paths
+are not written into the installed profile.
+
+Annotation capture and management require the native runtime on the source
+machine. Build `sprig/plugin_runtimes/annotate` with Rust 1.96 and install
+`herdr-annotate` to `$XDG_DATA_HOME/sprig/bin` (default `~/.local/share/sprig/bin`),
+or `herdr-annotate.exe` to `%LOCALAPPDATA%\sprig\bin` on Windows. Alternatively,
+set `SPRIG_ANNOTATE_BIN` to its full path in that machine's environment.
+The runtime does not require a legacy Herdr installation; the existing
+annotation JSONL store remains under the legacy plugin state directory.
 
 The original Square Dracula layout and assets remain in this directory as
 attributed source, but the supported installer installs the compact Rowan layout
@@ -47,6 +70,9 @@ instructions remain available in the [upstream repository](https://github.com/ky
 
 - Select a space or tab by clicking it; right-click for its context menu.
 - The `+` after the last tab opens terminal, agent, space, and worktree actions.
+- New worktree immediately creates an automatically named branch from the current
+  checkout and its workspace, without a naming prompt. Open worktree still shows
+  the existing checkout picker; Remove worktree still requires confirmation.
 - Files and Changes buttons open, switch, or close the right panel. The choice is remembered
   per space. Files previews and Changes diffs are read-only; there is no commit-entry row.
 - Hover a terminal header to reveal split-right, split-down, zoom, and close buttons.
@@ -84,7 +110,7 @@ Joseph's Herdr TUI fork without changing the terminal renderer or moving any pro
 It uses `rowan-spaces`, `rowan-agents`, `rowan-empty`, and the herd-scoped `rowan-picker`.
 
 ```sh
-python3 sprig/install.py
+python3 sprig/install.py --legacy-config /path/to/original/herdr/config.toml
 herdr-app check ~/.config/herdr-app/mods/rowan-spaces
 herdr-app check ~/.config/herdr-app/mods/rowan-agents
 herdr-app check ~/.config/herdr-app/mods/rowan-empty
@@ -93,10 +119,13 @@ herdr-app do layout.switch --name rowan-terminal
 ```
 
 The installer updates its owned Square Dracula dependencies, Rowan mods/theme/layout,
-and OMP display companion. It merges the Rowan layout's key section while preserving
-unrelated bindings, terminal overrides, settings, zoom, and machine configuration.
-Existing files are backed up under `~/.local/state/herdr-app/rowan-sidebar-backup-*`;
-each `manifest.json` maps destination paths to their original numbered copies.
+legacy plugin helper, and OMP display companion. The legacy profile replaces the
+Rowan, global, terminal, and Navigate key sections; unrelated key sections,
+settings, zoom, and machine configuration remain unchanged. Existing files,
+including the complete previous `keys.json`, are backed up under
+`~/.local/state/herdr-app/rowan-sidebar-backup-*`; each `manifest.json` maps
+destination paths to their original numbered copies. To restore previous keys,
+copy the saved `keys.json` identified in that manifest back to the app home.
 Use `--app-home` / `--agent-home` for explicit alternate installation roots.
 
 - Numbered herd tabs retain empty herds. `+` adds one. Right-click a machine heading
@@ -133,12 +162,32 @@ Use `--app-home` / `--agent-home` for explicit alternate installation roots.
   Explicit reorder intent survives optimistic model updates and late write conflicts;
   it is retired only when the core-acknowledged order matches. Per-window machine
   section order is never imposed globally on the core.
+- Repository hierarchy is presentation, not a filesystem migration. Repository
+  membership is stored by unqualified workspace ID in the source core's
+  `sprig-sidebar` document, separate from the built-in `herdr-app` layout.
+  A reopened frontend restores matching checkout paths before Git discovery;
+  other frontends share these facts, not this window's selection or fold state.
+  Unknown folders still use one canonical `git rev-parse`, at most four at once.
+  No full `git status` scan or separate `realpath` utility is needed.
+  Linked worktrees outside the main checkout group by their shared Git directory;
+  distinct repositories and machine/core profiles remain separate.
+- Hierarchy reads reconcile every 15 seconds while connected, or after a workspace,
+  path, acknowledged order or discovery change. Writes compare document versions
+  and merge on conflict. A fresh source-core layout, read after the hierarchy,
+  determines which workspace records may be removed; an offline or incomplete
+  frontend list never proves deletion. Closing the displayed parent retains
+  surviving group members. Cached non-repository results receive bounded
+  revalidation; malformed/unknown schemas are left unchanged.
+- This persistence feature requires the paired rebuilt Sprig frontend, which
+  exposes asynchronous `readDocument` / `writeDocument` to mods over its existing
+  core connection. **Do not install these new mods alone into an older frontend.**
+  No herdr-core modification or core restart is required. Updating the frontend
+  does require reopening its windows; keep the user's authored key profiles.
 - `w1`, `w2`, … are persistent **display aliases**, not core/API workspace IDs.
   They remain bound to the full machine-profile/space identity across row reordering,
   reload, and profile rename. Separate profiles on one host are not merged.
-- Ctrl+Alt+Up/Down cycles workspaces in the selected herd; Ctrl+Alt+Left/Right switches
-  herds and restores the remembered live space/tab/pane. Alt+Up/Down cycles that
-  herd's agents; Alt+1…9 selects a tab in the active workspace.
+- Workspace, herd, tab, and agent shortcuts follow the selected legacy TOML
+  configuration (or original defaults when no config is found).
 - Empty/unavailable selections show a non-terminal surface. The Rowan layout guards
   implicit create/rename, tab, pane, and paste shortcuts from acting on an off-herd
   workspace. Explicit external core commands remain independent of this UI.
@@ -232,9 +281,23 @@ opens the searchable guide; the centered font-ratio control remains at the botto
 The guide resolves terminal > current layout > global bindings, labels mod-only
 bindings, and searches readable action names as well as shortcut text.
 
-Explicit reload, resize mode, worktree/workthreads and annotation/plugin commands
-remain unported rather than being assigned unrelated substitutes. Configuration
-edits still hot-reload normally.
+The legacy compiler also routes reload, resize mode, worktree/Workthreads and
+annotation/plugin actions to their native/core implementations. Configuration
+edits hot-reload normally.
+
+### Clipboard shortcuts
+
+Set `remote_image_paste = "Ctrl+V"` in the existing `[keys]` table of your
+authored legacy profile and re-run `sprig/install.py --legacy-config <profile>`.
+Use the frontend's profile, not another machine's clipboard or key configuration.
+On Lappy, `~/.config/herdr-app/legacy-profile.toml` is the authored source; its
+Ctrl+V assignment replaces the former Alt+V assignment without keeping an alias.
+
+The configured action transfers clipboard images to remote terminals and pastes
+frontend clipboard text there otherwise. Windows local text paste is terminal-side;
+local Unix Ctrl+V remains the program's key. Ctrl+Shift+V supplies terminal-side
+paste unless an explicit legacy shortcut already owns it. An imported custom
+Alt+V binding is a profile choice, not a requirement for image paste.
 
 Keyboard qualification on 2026-10-31 used the actual Ash-built native app on a
 private Sway/XWayland display: Ctrl+Space held beyond one second; `f` and `?`

@@ -1,5 +1,96 @@
 # Herdr changelog
 
+## Unreleased
+
+### Fixed
+- New worktree immediately creates an automatically named branch and workspace,
+  without a title prompt or confirmation keystroke.
+  (#1, thanks @JSRRosenbaum)
+
+## [sprig-preview-2026.11.03.2] - 2026-11-03
+
+### New
+- Remember workspace repository/worktree groups in each source core so other
+  Sprig frontends and reopened windows can restore the hierarchy without
+  rediscovering every checkout. No herdr-core upgrade is required.
+  (#1, thanks @JSRRosenbaum)
+- Share hierarchy updates with version-checked merges; closing a workspace
+  removes its record without orphaning surviving worktrees. Disconnected
+  machines keep their metadata. (#1, thanks @JSRRosenbaum)
+
+### Fixed
+- Measure a visible pane before its initial terminal attachment, preventing an
+  old-size snapshot from being decoded at the new viewport width and then
+  corrected by another resize/repaint. Hidden tabs remain attached.
+  (#1, thanks @JSRRosenbaum)
+
+Requires the matching Sprig frontend and customization bundle; the core,
+ConPTY and native annotation/review runtimes are unchanged.
+
+## [sprig-preview-2026.11.03.1] - 2026-11-03
+
+### Fixed
+- Discover repository/worktree groups with bounded lightweight Git queries
+  instead of serial status scans, then publish each discovery batch together
+  so the sidebar does not reshuffle one completed lookup at a time.
+  (#1, thanks @JSRRosenbaum)
+- Handle Windows line endings in repository paths without requiring a separate
+  Unix `realpath` command. (#1, thanks @JSRRosenbaum)
+
+Customization-only update; native app/core binaries are unchanged.
+
+## [sprig-preview-2026.11.03] - 2026-11-03
+
+### Fixed
+- Paste frontend clipboard text into remote terminals instead of sending a
+  Ctrl+V keystroke to a program that cannot read that clipboard. Remote image
+  transfer and local Unix Ctrl+V behavior remain unchanged.
+  (#1, thanks @JSRRosenbaum)
+- Restore Ctrl+Shift+V terminal paste in the legacy layout without overriding
+  an explicitly assigned legacy shortcut. (#1, thanks @JSRRosenbaum)
+
+Unsigned development snapshot; Windows runtime/desktop checks and repository
+CI qualification remain pending.
+
+## [sprig-preview-2026.11.02] - 2026-11-02
+
+### New
+- Publish paired Linux x86-64 and Windows x64 app/core/customization development
+  bundles, with native annotation/review tools, checksums and install/rollback
+  instructions. Thanks @JSRRosenbaum.
+- Restore legacy prefix/help, navigation, copy/search, pane controls and
+  host-specific shortcuts. (#1, thanks @JSRRosenbaum)
+
+### Fixed
+- Creating a workspace in the background no longer steals the current view.
+  (#1, thanks @JSRRosenbaum)
+- Restore copy-on-release feedback and Windows Ctrl-click URL handling.
+  Windows binaries no longer need a separate VC++ Redistributable.
+  (#1, thanks @JSRRosenbaum)
+
+Development snapshot, not a stable/upstream release. Windows desktop validation
+and the disabled repository CI gate remain outstanding. Linux binaries require
+glibc 2.44; no macOS or ARM binaries are included.
+
+## Sprig background workspace focus fix — 2026-11-02
+
+- Background workspace creation no longer switches the addressed window away
+  from its current workspace, tab or pane. Keys/clicks and intentional worktree
+  launches still select the newly created workspace.
+
+## Sprig legacy interaction parity — 2026-11-02
+
+- Restore original prefix ownership, modal navigation, terminal Go To, keyboard
+  copy/search, pane cycling/resize, rename and field-local kill/yank controls.
+- Compile the original host-specific key profiles and custom commands; newer
+  bindings no longer intercept keys owned by terminal programs.
+- Port annotation/review, Worktrunk, Workthreads and sci-fi grid actions to
+  herdr-core without restarting agents or reinstalling the legacy server.
+- Restore copy-on-release feedback and use Windows' registered URL handler for
+  Ctrl-click links. Build Windows executables with the C runtime linked statically.
+- Clear authoritative terminal history without sending input, preserving the
+  wrapped cursor line and leaving alternate-screen programs unchanged.
+
 ## Sprig upstream integration — 2026-11-02
 
 - Integrated all upstream app changes through `71d3e8f`, including released

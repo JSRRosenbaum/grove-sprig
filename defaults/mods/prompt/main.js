@@ -36,7 +36,7 @@ export default class Prompt extends View {
       .border_1().border_color(primary ? t.solid : t.input).bg(primary ? t.solid : t.raised)
       .text_color(primary ? t.solid_foreground : t.foreground).text_size(12.5).font_medium().cursor_pointer()
       .hover(s => s.opacity(0.88)).on_click(action).child(text);
-    return v_flex().id("prompt").track_focus(this.handle).on_key_down((e, cx) => this.key(e, cx))
+    return v_flex().id("prompt").when(["pane.rename", "tab.rename", "space.rename", "tab.new", "space.new"].includes(p.command?.name), el => el.key_context("LegacyRename")).track_focus(this.handle).on_key_down((e, cx) => this.key(e, cx))
       .w_full().min_h(0).p(18).bg(t.popover).text_color(t.foreground)
       .child(h_flex().items_center().child(div().flex_1().text_size(15).font_semibold().child((p.title ?? "").replace(/^./, (c) => c.toUpperCase())))
         .child(div().text_size(11).text_color(t.dim).child("Esc")))

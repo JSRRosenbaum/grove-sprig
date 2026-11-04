@@ -2,6 +2,236 @@
 
 Canonical source: https://github.com/JSRRosenbaum/grove-sprig (`main`).
 
+## Durable workspace grouping — 2026-11-03
+
+Sprig now persists repository membership in a separate `sprig-sidebar` document
+on each source core. No herdr-core source or protocol change is needed.
+The frontend exposes asynchronous `readDocument` / `writeDocument` to trusted
+mods over its current core connection; a reconnect replaces that connection.
+This feature needs the paired rebuilt frontend, not a mods-only installation.
+
+Document schema: `{schema: 1, spaces: {<source-local workspace ID>: {cwd, git}}}`,
+where `git` is null for a verified non-repository, or
+`{name, commonDir, linked}`. No frontend machine-name prefixes, selected pane,
+zoom, fold or herd state is stored. Repository identity scopes a group; closing
+its displayed parent does not delete the remaining worktrees.
+
+On connection, the document loads before cold Git discovery. Only entries with
+matching workspace/current cwd hydrate the sidebar; machine/core replacement
+invalidates frontend state. Newly verified discovery updates are version-merged
+into the source document, not copied wholesale from a stale frontend cache.
+Connected frontends reconcile every 15 seconds and on relevant workspace/path
+or discovery changes. A hierarchy snapshot must be read before the fresh source
+layout used for cleanup, preventing a stale layout from erasing another
+frontend's newly published workspace. Transient frontend omissions and offline
+machines never authorize deletion. Unknown schemas remain untouched.
+
+Validation: 53 Node consumer tests, 47 Python installer/consumer tests and 307
+Linux app tests passed. Three document API tests also executed successfully on
+Lappy's native Windows runtime. In an isolated native frontend/core session,
+actual external linked worktrees and a symlinked/nested checkout were persisted.
+Reopening a private frontend restored the hierarchy with identity Git queries
+disabled and **zero such calls**, preserving all six existing terminal IDs/PIDs.
+Closing the main workspace removed only its document entry, retaining both
+linked worktrees. Actual native mod calls exercised remote CAS conflict results,
+local/peer isolation and rejection of an invalid machine route.
+This is not a Windows full-suite, physical-input or end-to-end latency claim.
+
+The related garbled-first-paint report was reproduced in a private native session
+with added attach-reply latency. An initial 120x40 snapshot arrived after the
+local VT had already resized for the viewport, shifting/wrapping rows until the
+program repainted. A generic next-frame callback was still too early because
+the workspace mod can reveal its surface later. Initial attachment for a
+potentially visible pane now waits for its actual canvas prepaint; hidden tabs
+retain their subscriptions. The same fixture then attached at its measured
+68x21 geometry with the correct device-pixel cell and no follow-up resize on
+that stream; native screenshots showed correctly aligned rows from first paint.
+This fixes the reproduced initial-size race, not every possible remote delay or
+simultaneous resize by another viewer. No core change or arbitrary paint delay
+was added. The latency/proxy fixture is temporary, not a production profiler.
+
+Packages: https://github.com/JSRRosenbaum/grove-sprig/releases/tag/sprig-preview-2026.11.03.2.
+Only the frontend/customizations change; paired core, ConPTY and native
+annotation/review runtimes remain unchanged. Reopen frontends for activation,
+not cores or OMP sessions. Prior development releases remain immutable below.
+
+## Sidebar discovery and Lappy paste profile — 2026-11-03
+
+The sidebar previously ran full `git status` scans serially, then separate
+top-level/common-directory/realpath queries for every workspace. The removed
+branch/ahead/behind values were no longer displayed. Partial discovery results
+could change grouping on unrelated redraws, producing a slowly reshuffling list.
+
+Discovery now uses one canonical `git rev-parse` query per folder, bounded to
+four concurrent lookups. A complete batch publishes together; transient failures
+retain retry semantics and machine/core identity changes invalidate old results.
+Windows CRLF output is normalized; no external Unix `realpath` is required.
+This changes presentation only: no repository or worktree is moved.
+
+Read-only probes of 18 actual Nix working directories found 17 sharing Athena's
+common Git directory; `athena-graph` is a distinct repository. Those local Git
+probes took about 35 ms on Nix, not an end-to-end Windows UI measurement.
+The isolated native sidebar rendered an external linked-worktree pair under a
+symlinked/nested main checkout while leaving another repository and machine
+namespace separate. Consumer tests cover delayed publication, bounded work,
+machine replacement/retry, canonical paths and Windows line endings.
+
+The owner explicitly changed Lappy's preference from Alt+V to Ctrl+V for
+frontend image/text paste. Its authored source is now
+`~/.config/herdr-app/legacy-profile.toml`; future installs must import that file,
+not the unchanged legacy-server config. Other shortcuts, commands, numbered-tab
+preferences and settings are preserved. Personal profiles are not shipped.
+
+Lappy's running Windows window loaded the new module and Ctrl+V profile without
+an app/core restart. Native screenshots and the live inspector confirmed rendering
+and repository groups; the final status had no file/mod errors. During SSH
+installation, inherited Owner Rights ACLs made Administrators-owned replacement
+files unreadable to the unelevated desktop app. Ownership of installer-owned
+files/directories and generated key metadata was restored to the existing
+desktop account, without broadening ACL grants. Install from the desktop user's
+context; an elevated SSH deployment must preserve that ownership.
+The Windows headless `check` command could not open a window in the SSH session;
+actual-window rendering, status and inspection were used instead. Physical
+Ctrl+V image input on Lappy remains a user check; its clipboard was not replaced
+and no synthetic input was sent to live agents. The same native paste action was
+previously exercised with text and PNGs in the isolated Linux frontend.
+
+Packages: https://github.com/JSRRosenbaum/grove-sprig/releases/tag/sprig-preview-2026.11.03.1.
+This is a customization-only update using the existing app/core/native runtimes;
+there is no native rebuild or core handover requirement. Older releases remain
+immutable below.
+
+## Remote terminal paste repair — 2026-11-03
+
+The reported copy failure was actually paste: Auri and Ash selections reached
+Rowan's regular clipboard (Ash also reached PRIMARY), but Ctrl+V sent only
+byte `16` to remote terminal input. A remote program cannot read the frontend's
+clipboard. The legacy key map also omitted Ctrl+Shift+V, previously supplied by
+the outer terminal emulator.
+
+The configured image-paste action now sends frontend text to remote terminals
+using their active bracketed-paste mode. Image transfer remains intact; local
+Unix Ctrl+V still goes to the program. Ctrl+Shift+V is a fallback in imported
+legacy profiles, with explicit legacy assignments retaining precedence.
+
+An owned isolated native frontend, Cua keyboard events and a raw remote input
+recorder demonstrated the failure before repair and exact Unicode/multiline
+input afterward, with bracketed paste both off and on. Local Ctrl+V/Ctrl+Shift+V
+and actual remote PNG transfer were also exercised. This is not a Windows
+runtime qualification claim.
+
+Updated packages:
+https://github.com/JSRRosenbaum/grove-sprig/releases/tag/sprig-preview-2026.11.03.
+The prior snapshot below is retained unchanged.
+
+## Downloadable development snapshot — 2026-11-02
+
+Packages: https://github.com/JSRRosenbaum/grove-sprig/releases/tag/sprig-preview-2026.11.02
+
+This unsigned, unofficial development snapshot distributes the existing
+Ash-built code `6c182c1`; subsequent source commits update documentation only.
+Linux x86-64 and Windows x64 bundles include the paired core, native review and
+annotation runtimes, customizations, licenses, SHA-256 manifests and installation
+instructions. No personal key profiles, machine records or credentials ship.
+The binaries retain their upstream executable names/version metadata.
+
+The Linux app requires glibc 2.44; this is not a portable older-distribution or
+standalone NixOS package. Windows bundles retain the pinned ConPTY directory
+layout and static CRT linkage. Set `prompt_new_tab_name=false` in the user's
+authored legacy profile when compiling customizations; preserve host-specific
+keys rather than importing another machine's profile.
+
+This is **not release-qualified**: the latest Windows artifact has not executed
+on Windows, physical Windows desktop checks remain pending, and GitHub Actions
+is disabled for this repository. Do not treat older Windows test passes or an
+empty check list as qualification. Integration into `main` is tracked in
+https://github.com/JSRRosenbaum/grove-sprig/pull/1; do not bypass its CI gate.
+There are no macOS or ARM builds in this snapshot. Official Herdr installers and
+auto-update channels do not select Sprig's development assets.
+
+## Three-host deployment — 2026-11-02
+
+The owner authorized deployment of code commit `6c182c1` to Nix, Rowan and Ash,
+and explicitly approved reopening the Rowan frontend. App, paired core, native
+annotation/review runtimes and effective host key profiles are installed on all
+three. Runtime names and state identities remain `herdr-app`/`herdr-core`.
+
+| Host | Frontend state after deployment | Existing live terminal PIDs preserved |
+|---|---|---:|
+| Nix | Installed; no production GUI launched | 51 |
+| Rowan | Updated window 2 reopened and verified | 24 |
+| Ash | Installed; no production GUI launched | 15 |
+
+Only planned `hc update --from` handovers changed production core server PIDs.
+All existing terminal addresses and process identities survived. Rowan also
+retained all 24 observed TTYs; its workspace, tab, pane, zoom, 49 existing sidebar
+aliases and both herds were preserved. Older holders remain intentionally alive.
+Nix's existing bundled loader/runtime is retained for its NixOS environment;
+the four deployed ELF files have the same qualified hashes on every host.
+Nix's registered `rowan` logical core ID matches the authoritative Rowan ID.
+Its `auri` connection is target `ash`, core session `auri`, not an SSH host
+called Auri.
+
+Installed runtimes reported versions, native mod checks passed, and actual
+isolated `terminal.clear` RPC checks on all hosts removed an old marker while
+retaining the cursor line. Owned smoke cores/displays were cleaned up.
+The live Rowan GUI rendered without reported configuration/mod errors.
+Nix/Ash desktop interaction was not exercised.
+
+After the owner reported the tab-name prompt, Rowan's authored profile was set
+to `[ui] prompt_new_tab_name = false` and reloaded without changing bindings.
+Cua-delivered prefix+c in an isolated matching profile created numbered tab 2
+with no prompt. Keep this preference on future Rowan installs by passing
+`--legacy-config ~/.config/herdr-app/legacy-profile.toml`; do not reimport the
+retired snapshot/defaults over the owner's newer choice. Ash already disables
+the prompt; Nix retains its own imported local preference.
+
+Rollback/evidence:
+`~/.local/state/herdr-app/sprig-deploy-6c182c1/` on Rowan;
+`~/.local/state/herdr-app/sprig-deploy-6c182c1-01a19f1e/` on Nix/Ash.
+The central private payload/receipt directory is
+`/mnt/tank/AppCaches/rowan-dev/sprig-deploy-20261102-6c182c1/`.
+Rollback launchers/configuration only as needed; never overwrite progressed
+conversation, core or view state with old snapshots.
+
+
+## Background workspace focus repair — 2026-11-02
+
+CLI `space.new` now creates structure without selecting it in the addressed
+window. Its current workspace, tab, pane and explicit machine selection remain
+unchanged; other windows retain their own view too. Keys and clicks still show
+the new workspace. Scripts intentionally switching views use `space.select` on
+the returned `space` ID. Worktrunk and Workthreads were migrated accordingly;
+Workthreads `--no-focus` no longer briefly selects and restores another view.
+Benchmark and recording/test setup callers now select their intended target.
+
+The root causes were unconditional model selection on creation, shared-document
+fallback replacing an intentional empty view, and premature clearing of the
+old pane before focus synchronization. The latter left a hidden terminal's
+keyboard focus live, allowing render to select its old workspace again.
+
+Observed in an actual isolated two-window Linux release run: background local
+and remote creation, shared rename propagation, empty-machine/no-selection
+preservation, Workthreads focus/no-focus, Cua-delivered legacy new-workspace
+keys, and intentional Worktrunk creation/selection all passed. The second
+window remained on its own terminal. Final suites: 304 app unit tests plus
+COLRv1/GPU/contract checks, 47 Python, 50 Node and 27 Bun. The permanent model
+regression checks workspace/tab/pane/zoom preservation and foreground selection.
+
+All builds ran on Ash. Linux app SHA-256:
+`ea4cd0cd731806a1910565b71d1c614074c95246085c2790ca640ee102de02ce`.
+The corrected unsigned Windows package has 307 verified manifest entries on
+Rowan and no dynamic MSVC CRT import. Its SHA-256:
+`cfe770c31eee7093c2bab502ae48911cb27f0c491f0504db1965f60d5f36bee8`.
+The latest Windows artifact was **not executed on Lappy**: its configured
+Windows SSH route went offline. Earlier superseded test results do not qualify it.
+Physical Windows GUI qualification remains outstanding.
+
+Evidence and staged artifacts:
+`/mnt/tank/AppCaches/rowan-dev/sprig-workspace-focus-20261102/`.
+Production frontends, cores and OMP sessions were not stopped or replaced.
+
+
 ## Current adopted upgrade — 2026-11-02
 
 Joseph subsequently authorized **all reviewed upstream improvements**, not just
@@ -121,8 +351,10 @@ Always isolate app home, core session, runtime/config/state paths and display;
 never use a production core stop/restart as a test.
 
 The installer validates inputs and ownership, rejects symlinked descendants,
-retains fresh platform shortcuts, prunes only unchanged obsolete overlay bindings,
-and allocates rollback copies before replacement. Caught I/O failures roll back
+and replaces newer global/terminal captures with an explicit legacy key profile.
+Per-machine profiles preserve source-specific plugin availability; normal keys
+and UI preferences remain frontend-local unless server-keymap mode is explicit.
+It allocates rollback copies before replacement. Caught I/O failures roll back
 file bytes without new allocation. Power-loss durability, concurrent installation
 and adversarial directory-swap races are not promised; use an exclusive trusted
 configuration directory. Backups are retained even when an install fails.
@@ -243,3 +475,88 @@ requalified in this consolidation; their existing consumer behavior tests passed
 Rowan's `just`/Bun shims lacked selected installed versions, so Python/Node ran
 directly and the Bun check used Ash's installed runtime. No global tool configuration
 was changed to conceal that limitation.
+
+## Legacy interaction contract — 2026-11-02
+
+The owner requested exact legacy keybinding parity, with newer conflicting
+bindings displaced rather than retained as aliases. The behavior oracle is
+Herdr 0.9.5 at `5ea51c013a3fc6bc783b80caacf0f3a39575e70a`, together with each
+frontend's actual legacy configuration.
+
+Normal bindings, prefix and UI preferences remain frontend-local by default.
+The selected endpoint supplies its custom commands, not its entire keymap.
+`--legacy-key-source server` explicitly selects the full endpoint profile;
+`--legacy-machine-config NAME=PATH` supplies each named endpoint's configuration.
+An unknown endpoint has no inherited local plugin commands. Profiles are selected
+independently in each window.
+
+This ports the real prefix dispatcher, Navigate and per-terminal Go To modes,
+copy/search mode, field kill/yank controls, pane sizing, scrollback editing,
+worktree launchers, annotation editor/manager and configured plugin actions.
+The prefix stays active until consumed or cancelled; unknown suffixes do not leak
+into the shell. The legacy help panel shows the effective map. New global and
+terminal captures are replaced by the installer, with rollback backups.
+
+### Reproducing the paired core
+
+The app's clear-scrollback action requires Sprig's paired core, not an unpatched
+upstream binary. Its source is retained as checksum-pinned patches in this same
+repository, including the separate Ghostty submodule delta:
+
+```sh
+python3 scripts/prepare-sprig-core.py /new/path/sprig-core
+cargo build --locked --release --manifest-path /new/path/sprig-core/Cargo.toml -p herdr-core
+```
+
+The preparation command refuses an existing destination, verifies patch hashes,
+fetches the exact upstream core and renderer revisions, and checks each patch
+before applying it. It does not install anything or touch a running core.
+Use the core's documented Zig/toolchain prerequisites. Build on Ash.
+
+`terminal.clear` clears authoritative primary-screen history while retaining
+the complete visible wrapped cursor line, parser/mode state, hyperlinks and
+palette overrides. Alternate-screen clearing returns false. Clear intent and
+actual pending DEC mode transitions survive slow-viewer loss/resynchronization;
+no shell input is injected to simulate the operation.
+
+### Qualification boundary
+
+The Linux app passed 303 unit tests, 26 COLRv1 tests, command/notice/skill checks
+and both actual GPU pixel-readback checks. Final adapter suites passed 47 Python,
+50 Node and 27 Bun tests. The standalone annotation runtime passed 70 Rust tests;
+the retained review runtime passed 188.
+The final core suite passed serially with `HC_TEST_WATCHDOG_S=180`; its default
+30-second per-binary watchdog is too short for the serialized integration suite.
+The renderer wrapper passed 15 tests, including dirty-prompt clear, hyperlinks
+and explicit palette overrides.
+
+Private Xvfb/Cua runs exercised two independent windows, effective key help,
+held/repeated/cancelled prefix input, pane split/cycle/resize, Navigate, Go To,
+new-tab prompts, clipboard paste followed by Ctrl+C field clearing, empty remote
+machine selection and keyboard-origin source-owned remote launch. The standalone
+annotation editor saved a real record in the private store, and copy-context
+export was read back from the clipboard. The Worktrunk picker created branch
+`wt` and its actual checkout in the owned fixture. All 35 installed mods passed
+native checking. Tests never used the user's display or stopped production
+app/core/OMP sessions. Private Xvfb mouse-drag qualification was blocked by Cua's
+unavailable uinput slave device; no synthetic desktop bypass was substituted.
+
+Windows binaries use static MSVC CRT linkage: a separate VC++ Redistributable is
+not required by these executables. Final native execution on Lappy passed
+58 key/field/copy/link tests plus 3 core clear and 11 wire tests. An isolated
+ConPTY shell accepted `abc`, displayed `SPRIG_INPUT_abc`, then cleared the
+pre-clear marker from authoritative readback. All 306 manifest-listed package
+files matched on Rowan and Lappy.
+SSH session 0 is not an interactive desktop. Physical Windows Ctrl-click,
+mouse-drag selection, rendering and desktop clipboard feedback remain unverified;
+native tests and ConPTY checks do not substitute for those gestures.
+
+Final Linux release source was rebuilt from the canonical core patches and
+byte-compared against the fully qualified source. SHA-256:
+app `5ca53d411a5582ff4145f870719e5ec138fcd104ff1092a0c346c0e94c1c25e6`;
+core `7759757b1a803bd9c7dd8348341e51f757c93675152de068501f1d9b337d3d21`.
+The Windows package SHA-256 is
+`b16b9a45f2bbe7bee1303ab02bac48af0c8aefcb65e5a21f8b40738f18c34233`.
+This parity update is staged separately, not installed over live sessions.
+
+

@@ -3,7 +3,7 @@
 
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { spaces, machines, panes, run, openOverlay, exec, hc, theme, shared, setShared, watchFolder, window, focused, nextCommand, settings, keys } from "herdr";
+import { spaces, machines, panes, run, openOverlay, exec, hc, readDocument, writeDocument, theme, shared, setShared, watchFolder, window, focused, nextCommand, settings, keys } from "herdr";
 
 // Where a space is now: its first terminal's live folder, else where it was made.
 // `ps`: panes(), read once by the caller (each read copies every pane).
@@ -28,7 +28,8 @@ export function tone(t, status) {
 
 export default class Spaces extends View {
   init(_props, cx) {
-    this.git = {}; this.checked = {}; this.unsure = new Set(); this.pending = new Set();
+    this.git = {}; this.checked = {}; this.unsure = new Set(); this.pending = new Set(); this.inFlight = new Set(); this.gitMachine = {};
+    this.hierarchy = new Map(); this.verified = new Map(); this.gitRevision = 0;
     this.busy = {}; this.ready = {}; this.at = {}; this.watching = new Set();
     this.shown = new Set(spaces().map(s => s.id)); this.born = {}; this.machines = [];
     this.handle = cx.focus_handle();
@@ -165,6 +166,19 @@ export default class Spaces extends View {
   command(c, cx) {
     const h = this.herd(), all = this.state.herds, at = all.indexOf(h);
     if (c === "prefix-cancel") return;
+    const worktree = /^worktree-(new|open|remove)(?::(.+))?$/.exec(c);
+    if (worktree) {
+      let target = focused()?.space;
+      if (worktree[2]) { try { target = decodeURIComponent(worktree[2]); } catch { return; } }
+      const current = spaces().find(s => s.id === target && h.members.includes(this.machineKey(s.machine)));
+      if (!current || !machines().some(m => m.name === current.machine && m.layout === "ready")) return;
+      const action = worktree[1];
+      const folder = (focused()?.space === current.id && focused()?.cwd) || place(current, panes());
+      openOverlay({mod: "square-dracula-worktree", kind: "dialog", frame: "none",
+        ...(action === "open" ? {width: 560, height: 480} : {width: 460, height: 280}),
+        props: {space: current.id, machine: current.machine, folder, action}});
+      return;
+    }
     if (c === "focus") {
       this.cursor = focused()?.space;
       this.handle.focus();
@@ -180,7 +194,7 @@ export default class Spaces extends View {
     if (c === "font-larger") { this.setFontRatio(this.fontMetrics().ratio * 100 + 5); return; }
     if (c === "font-reset") { this.setFontRatio(80); return; }
     if (/^font-ratio:\d+(?:\.\d+)?$/.test(c)) { this.setFontRatio(Number(c.slice(11))); return; }
-    if (c === "inspect") setShared("rowan.sidebar.inspect", {state: this.state, order: this.ordered().map(r => r.w.id), repos: this.ordered().filter(r => r.g).map(r => r.g.repo)});
+    if (c === "inspect") setShared("rowan.sidebar.inspect", {state: this.state, order: this.ordered().map(r => r.w.id), repos: this.ordered().filter(r => r.g).map(r => r.g.repo), hierarchy: [...this.hierarchy.values()].map(s => ({machine: s.on, identity: s.identity, attempted: s.attempted, busy: s.busy, error: s.error}))});
     else if (c.startsWith("active:")) this.activeCommand(c.slice(7));
     else if (c === "herd-add") this.addHerd();
     else if (/^herd-select:\d+$/.test(c)) this.switchHerd(Number(c.slice(12)));
@@ -399,10 +413,120 @@ export default class Spaces extends View {
     const now = Date.now();
     const sp = spaces();
     for (const s of sp) if (!this.shown.has(s.id)) this.born[s.id] ??= now;
+    this.syncHierarchy(cx);
     const due = this.due(now, sp, panes());
     if (due.size) this.refreshGit(due, cx);
     this.reconcileOrder(now);
     if (sp.some((s) => !this.shown.has(s.id))) cx.notify();
+  }
+
+  // Core stores the facts, not this window's ordering, selection or fold state.
+  // A first document read precedes Git discovery; later reads share other
+  // frontends' changes without rescanning their checkouts.
+  syncHierarchy(cx) {
+    const now = Date.now(), sp = spaces(), ps = panes();
+    for (const m of machines()) {
+      const on = m.name ?? null, identity = this.machineKey(on);
+      let slot = this.hierarchy.get(on);
+      if (!slot || slot.identity !== identity) {
+        for (const key of Object.keys(this.git)) if (JSON.parse(key)[0] === on && this.gitMachine[key] !== identity) {
+          delete this.git[key]; delete this.checked[key]; delete this.gitMachine[key];
+          this.unsure.delete(key); this.verified.delete(key);
+        }
+        slot = {on, identity, ready: false, attempted: false, busy: false, dirty: true, next: 0, error: null};
+        this.hierarchy.set(on, slot);
+      }
+      if (m.layout !== "ready") { slot.ready = false; continue; }
+      if (!slot.ready) { slot.ready = true; slot.attempted = false; slot.next = 0; }
+      const signature = JSON.stringify([
+        sp.filter(s => (s.machine ?? null) === on).map(s => [s.id, place(s, ps)]).sort((a,b) => a[0].localeCompare(b[0])),
+        m.space_order ?? null
+      ]);
+      if (signature !== slot.signature) { slot.signature = signature; slot.dirty = true; }
+      if (slot.busy || (!slot.dirty && now < slot.next)) continue;
+      slot.busy = true; slot.dirty = false; slot.next = now + 15000;
+      cx.spawn(async cx => {
+        try {
+          await this.refreshHierarchy(slot, cx);
+          slot.error = null;
+        } catch (error) {
+          slot.error = String(error.message ?? error);
+          slot.next = Date.now() + 15000;
+        } finally {
+          slot.attempted = true; slot.busy = false;
+          cx.notify();
+        }
+      });
+    }
+  }
+  hierarchyCurrent(slot) {
+    return this.hierarchy.get(slot.on) === slot && slot.identity === this.machineKey(slot.on) &&
+      machines().some(m => (m.name ?? null) === slot.on && m.layout === "ready");
+  }
+  hierarchyValue(value) {
+    if (value === null) return {schema: 1, spaces: {}};
+    if (!value || value.schema !== 1 || !value.spaces || typeof value.spaces !== "object" || Array.isArray(value.spaces))
+      throw new Error("Unsupported sprig-sidebar document; left unchanged");
+    return value;
+  }
+  restoreHierarchy(slot, document, cx) {
+    const ps = panes();
+    for (const s of spaces()) {
+      if ((s.machine ?? null) !== slot.on) continue;
+      const id = JSON.parse(this.spaceKey(s))[1], entry = document.spaces[id], key = where(s, ps);
+      if (!entry || entry.cwd !== place(s, ps) || this.verified.has(key) || this.inFlight.has(key)) continue;
+      const g = entry.git;
+      if (g !== null && (!g || typeof g.name !== "string" || typeof g.commonDir !== "string" || typeof g.linked !== "boolean")) continue;
+      const info = g === null ? null : {name: g.name, repo: JSON.stringify([slot.on, g.commonDir]), linked: g.linked};
+      if (!(key in this.git) || JSON.stringify(this.git[key]) !== JSON.stringify(info)) {
+        this.git[key] = info; this.checked[key] = Date.now();
+        if (info === null) this.unsure.add(key);
+      }
+      this.gitMachine[key] = slot.identity;
+      if (info && !slot.on) this.watch(g.commonDir, cx);
+    }
+  }
+  async refreshHierarchy(slot, cx) {
+    const options = {on: slot.on};
+    // Read hierarchy first: a layout read before it could miss a workspace
+    // another frontend has already added to the newer hierarchy snapshot.
+    let snapshot = await readDocument("sprig-sidebar", options);
+    let layout = await readDocument("herdr-app", options);
+    for (let attempt = 0; attempt < 3; attempt++) {
+      if (!this.hierarchyCurrent(slot)) return;
+      const document = this.hierarchyValue(snapshot.value);
+      if (layout.value !== null && (!Array.isArray(layout.value?.spaces) ||
+          layout.value.spaces.some(s => !s || typeof s.id !== "string")))
+        throw new Error("Cannot reconcile sidebar without a valid workspace document");
+      const live = new Set((layout.value?.spaces ?? []).map(s => s.id));
+      this.restoreHierarchy(slot, document, cx);
+      const next = {...document, spaces: {...document.spaces}}, revisions = new Map(), ps = panes();
+      // Only a fresh source-core layout can remove metadata. Missing optimistic
+      // spaces(), a loading layout, and disconnected machines are not deletion.
+      for (const id of Object.keys(next.spaces)) if (!live.has(id)) delete next.spaces[id];
+      for (const s of spaces()) {
+        if ((s.machine ?? null) !== slot.on) continue;
+        const id = JSON.parse(this.spaceKey(s))[1], key = where(s, ps);
+        if (!live.has(id) || !this.verified.has(key) || this.gitMachine[key] !== slot.identity || this.unsure.has(key)) continue;
+        const info = this.git[key];
+        if (info === undefined) continue;
+        next.spaces[id] = {cwd: place(s, ps), git: info === null ? null :
+          {name: info.name, commonDir: JSON.parse(info.repo)[1], linked: info.linked}};
+        revisions.set(key, this.verified.get(key));
+      }
+      let result;
+      if (JSON.stringify(next) !== JSON.stringify(document)) {
+        result = await writeDocument("sprig-sidebar", next, snapshot.version, options);
+        if (!this.hierarchyCurrent(slot)) return;
+      }
+      if (!result || result.written) {
+        for (const [key, revision] of revisions) if (this.verified.get(key) === revision) this.verified.delete(key);
+        return;
+      }
+      snapshot = result;
+      layout = await readDocument("herdr-app", options);
+    }
+    throw new Error("Sidebar changed concurrently; will reconcile on the next read");
   }
 
   // Places whose git could have changed: new ones (a new space, a cd), where a
@@ -413,7 +537,14 @@ export default class Spaces extends View {
     const at = {};
     for (const s of sp) at[s.id] = where(s, ps);
     const keys = new Set(Object.values(at).filter((k) => JSON.parse(k)[1]));
-    const due = new Set([...keys].filter((k) => !(k in this.git)));
+    for (const k of keys) {
+      const on = JSON.parse(k)[0], identity = this.machineKey(on);
+      if (k in this.gitMachine && this.gitMachine[k] !== identity) {
+        delete this.git[k]; delete this.checked[k]; delete this.gitMachine[k]; this.unsure.delete(k);
+        this.verified.delete(k);
+      }
+    }
+    const due = new Set([...keys].filter((k) => !(k in this.git) && !this.inFlight.has(k) && !this.pending.has(k)));
     for (const [id, k] of Object.entries(at)) if (this.at[id] && this.at[id] !== k && keys.has(k)) due.add(k);
     this.at = at;
     const spaceOf = {};
@@ -433,13 +564,16 @@ export default class Spaces extends View {
     if (window()?.active) {
       for (const k of keys) {
         const asks = this.git[k] || this.unsure.has(k);
-        if (asks && !this.folded.has(JSON.parse(k)[0]) && now - (this.checked[k] ?? 0) > FALLBACK) due.add(k);
+        if (asks && !this.inFlight.has(k) && !this.pending.has(k) && !this.folded.has(JSON.parse(k)[0]) && now - (this.checked[k] ?? 0) > FALLBACK) due.add(k);
       }
     }
-    return due;
+    return new Set([...due].filter(k => {
+      const slot = this.hierarchy.get(JSON.parse(k)[0]);
+      return !slot || (slot.ready && slot.attempted);
+    }));
   }
 
-  // `key` and the other places in its repo (a commit there moves their ahead/behind).
+  // Places sharing a repository may need rediscovery after a worktree operation.
   sameRepo(key, keys) {
     const repo = this.git[key]?.repo;
     return [key, ...(repo ? [...keys].filter((k) => this.git[k]?.repo === repo) : [])];
@@ -489,7 +623,7 @@ export default class Spaces extends View {
     });
   }
 
-  // One look at a time, each place once however often it was asked for meanwhile.
+  // Publish a complete discovery batch rather than moving worktrees one by one.
   refreshGit(keys, cx) {
     for (const k of keys) this.pending.add(k);
     if (this.refreshing) return;
@@ -498,7 +632,34 @@ export default class Spaces extends View {
       while (this.pending.size) {
         const keys = [...this.pending];
         this.pending.clear();
-        for (const key of keys) await this.check(key, cx);
+        keys.forEach(k => this.inFlight.add(k));
+        const results = new Array(keys.length);
+        let next = 0;
+        await Promise.all(Array.from({length: Math.min(4, keys.length)}, async () => {
+          for (;;) {
+            const i = next++;
+            if (i >= keys.length) return;
+            results[i] = await this.identify(keys[i]);
+          }
+        }));
+        for (let i = 0; i < keys.length; i++) {
+          const key = keys[i], result = results[i], on = JSON.parse(key)[0];
+          if (result.machine !== this.machineKey(on)) { this.pending.add(key); continue; }
+          this.checked[key] = Date.now();
+          this.gitMachine[key] = result.machine;
+          if (result.unsure) this.unsure.add(key); else this.unsure.delete(key);
+          if (result.info !== undefined) this.git[key] = result.info;
+          if (result.info !== undefined) {
+            this.verified.set(key, ++this.gitRevision);
+            const slot = this.hierarchy.get(on);
+            if (slot) slot.dirty = true;
+          }
+          else this.git[key] ??= null;
+          if (result.info && !on) this.watch(JSON.parse(result.info.repo)[1], cx);
+        }
+        this.syncHierarchy(cx);
+        cx.notify();
+        keys.forEach(k => this.inFlight.delete(k));
       }
       const used = new Set(Object.values(this.git).filter(Boolean).map((g) => JSON.parse(g.repo)).filter(([on]) => !on).map(([, repo]) => repo));
       for (const repo of this.watching) if (!used.has(repo)) this.watching.delete(repo);
@@ -507,44 +668,25 @@ export default class Spaces extends View {
     });
   }
 
-  // One place's git: branch, ahead/behind, its repo.
-  async check(key, cx) {
-    const [on, cwd] = JSON.parse(key);
-    this.checked[key] = Date.now();
-    this.unsure.delete(key);
+  // Repository identity does not require scanning a worktree's status.
+  async identify(key) {
+    const [on, cwd] = JSON.parse(key), machine = this.machineKey(on);
     try {
-      // No optional locks: a status that touched the index would wake the watch again.
-      const r = await exec("git", ["--no-optional-locks", "status", "--porcelain=v2", "--branch"], { cwd, on });
-      if (r.code !== 0) {
-        // Only git's own "no" is remembered as no repo; anything else is asked again.
-        if (!/not a git repository/i.test(r.stderr)) this.unsure.add(key);
-        this.git[key] = null;
-        return;
-      }
-      // The repo's own .git folder names it; a worktree's top differs from it.
-      const top = await exec("git", ["rev-parse", "--show-toplevel"], { cwd, on });
-      const common = await exec("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], { cwd, on });
-      const resolved = common.code === 0 ? await exec("realpath", [common.stdout.trim()], { on }) : null;
-      if (!resolved || resolved.code !== 0 || top.code !== 0) { this.unsure.add(key); return; }
-      const repo = resolved.stdout.trim();
+      const r = await exec("git", ["rev-parse", "--path-format=absolute", "--show-toplevel", "--git-common-dir"], { cwd, on });
+      if (r.code !== 0)
+        return /not a git repository/i.test(r.stderr) ? {machine, info: null} : {machine, unsure: true};
+      // Git's absolute path format is canonical; no separate realpath process
+      // is needed (and that Unix utility is not available on every Windows host).
+      const [top, repo] = r.stdout.trim().split(/\r?\n/).map(line => line.trim());
+      if (!top || !repo) return {machine, unsure: true};
       const name = repo.endsWith("/.git") ? base(repo.slice(0, -5)) : base(repo).replace(/\.git$/, "");
-      const info = { name, branch: null, ahead: 0, behind: 0, repo: JSON.stringify([on, repo]), linked: repo !== `${top.stdout.trim()}/.git` };
-      for (const line of r.stdout.split("\n")) {
-        if (line.startsWith("# branch.head ")) info.branch = line.slice(14);
-        else if (line.startsWith("# branch.ab ")) {
-          const [a, b] = line.slice(12).split(" ");
-          info.ahead = Math.abs(parseInt(a, 10)) || 0;
-          info.behind = Math.abs(parseInt(b, 10)) || 0;
-        }
-      }
-      this.git[key] = info;
-      if (!on) this.watch(repo, cx);
+      const info = { name, repo: JSON.stringify([on, repo]), linked: repo !== `${top}/.git` };
+      return {machine, info};
     } catch {
-      // Couldn't ask (the machine is away): keep what it showed, look again later.
-      this.git[key] ??= null;
-      this.unsure.add(key);
+      return {machine, unsure: true};
     }
   }
+
 
   watch(repo, cx) {
     if (this.watching.has(repo)) return;
@@ -699,7 +841,7 @@ export default class Spaces extends View {
     const h = this.herd(), scoped = sp.filter(s => h.members.includes(this.machineKey(s.machine)));
     const current = scoped.find(s => s.id === focused()?.space);
     const selectedReady = Boolean(current && machines().some(m => m.name === current.machine && m.layout === "ready"));
-    const scope = {herd: h.id, machineKeys: h.members.map(key => this.machineName(key) ?? "@local"), spaceIds: scoped.map(s => s.id), labels: Object.fromEntries(scoped.map(s => [s.id, this.label(s)])), selectedReady, empty: scoped.length === 0};
+    const scope = {herd: h.id, machineKeys: h.members.map(key => this.machineName(key) ?? "@local"), spaceIds: scoped.map(s => s.id), orderedIds: this.ordered().map(r => r.w.id), labels: Object.fromEntries(scoped.map(s => [s.id, this.label(s)])), selectedReady, empty: scoped.length === 0};
     const surface = selectedReady ? "rowan-workspace" : "rowan-empty";
     if (surface !== this.surfaceDesired) {
       this.surfaceDesired = surface;
@@ -720,7 +862,8 @@ export default class Spaces extends View {
     const bindings = keys().filter(k => k.section === "global" || k.section === "terminal" ||
       (layoutName && k.section === `layout:${layoutName}`));
     const priority = s => s === "terminal" ? 2 : s.startsWith("layout:") ? 1 : 0;
-    const help = bindings.find(k => k.action === "app.help" &&
+    const legacyHelp = bindings.some(k => k.action === "mod.open:rowan-help");
+    const help = bindings.find(k => k.action === (legacyHelp ? "mod.open:rowan-help" : "app.help") &&
       !bindings.some(other => other.keys === k.keys && priority(other.section) > priority(k.section)));
     const helpHint = help ? `Keybinds (${help.keys})` : "Keybinds";
     return v_flex().size_full().min_h(0).pt(12).bg(t.chrome).text_size(this.metrics.fontSize).child(tabs)
@@ -731,7 +874,7 @@ export default class Spaces extends View {
         .when(h.members.length === 0, e => e.child(div().id("empty-herd").px(12).py(8).text_color(t.dim).child("Empty herd — move a machine here from its heading menu.")))
         .children(this.grouped(t, compact, rows)))
       .child(h_flex().id("sidebar-help").h(this.metrics.rowHeight + 4).flex_none().items_center().justify_center()
-        .child(ratioControl("sidebar-help-button", compact ? "?" : "Keys", helpHint, () => run("app.help"))))
+        .child(ratioControl("sidebar-help-button", compact ? "?" : "Keys", helpHint, () => legacyHelp ? run("mod.open", {name: "rowan-help"}) : run("app.help"))))
       .when(!compact, e => e.child(h_flex().id("sidebar-font-controls").px(14)
         .h(this.metrics.rowHeight + 4).flex_none().gap(3).items_center().justify_center()
         .child(ratioControl("sidebar-font-smaller", "−", "Smaller sidebar text", () => this.command("font-smaller")))

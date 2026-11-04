@@ -37,6 +37,8 @@ mod update_notes;
 mod vt;
 mod win32_keys;
 mod window;
+#[cfg(test)]
+mod legacy_fields_tests;
 
 use gpui::*;
 

@@ -19,7 +19,7 @@ Mods can add their own actions, which are not listed here.
 
 ## `space.new`
 
-Make a space: its name (default: none, so it's called after where its first terminal is), the folder its terminals start in (default: the focused terminal's), its first tab's name (default: none, so it's called by its number), optionally an agent (argv) and its first message (task), and the machine it lives on (`hc machine ls`; default the focused space's machine for keys and clicks, this computer for scripts; empty string: this computer; its terminals start in that machine's home unless folder).
+Make a space: its name (default: none, so it's called after where its first terminal is), the folder its terminals start in (default: the focused terminal's), its first tab's name (default: none, so it's called by its number), optionally an agent (argv) and its first message (task), and the machine it lives on (`hc machine ls`; default the focused space's machine for keys and clicks, this computer for scripts; empty string: this computer; its terminals start in that machine's home unless folder). Keys and clicks select the new space; scripts preserve the current view and may explicitly space.select the returned space id.
 
 | Argument | Required |
 |---|---|
@@ -118,6 +118,42 @@ Close a pane and end its terminal.
 |---|---|
 | `pane` | no |
 
+## `pane.rename`
+
+Rename a pane; an empty name restores its automatic title.
+
+| Argument | Required |
+|---|---|
+| `pane` | no |
+| `name` | no |
+
+## `pane.resize`
+
+Resize the focused pane toward left, right, up or down.
+
+| Argument | Required |
+|---|---|
+| `direction` | yes |
+| `pane` | no |
+
+## `pane.resize_mode`
+
+Enter keyboard pane-resize mode; arrows or h/j/k/l resize, Escape or Enter exits.
+
+No arguments.
+
+## `terminal.clear`
+
+Clear the focused terminal's displayed screen and scrollback.
+
+No arguments.
+
+## `terminal.edit_scrollback`
+
+Open the focused terminal's scrollback in the machine's $EDITOR.
+
+No arguments.
+
 ## `terminal.open`
 
 Start a terminal: as a new tab (place "tab", default), or "right"/"down" of the focused pane.
@@ -193,6 +229,14 @@ Show the previous space.
 
 No arguments.
 
+## `machine.select`
+
+Select a ready machine, including one with no spaces (empty string selects this computer).
+
+| Argument | Required |
+|---|---|
+| `machine` | no |
+
 ## `tab.select`
 
 Show a tab (by position in the space, or id).
@@ -263,6 +307,63 @@ Swap the focused pane with its neighbor in a direction.
 |---|---|
 | `direction` | yes |
 
+## `pane.cycle`
+
+Focus the next or previous pane in layout order.
+
+| Argument | Required |
+|---|---|
+| `direction` | yes |
+
+## `pane.last`
+
+Focus the previously focused pane.
+
+No arguments.
+
+## `terminal.copy_mode`
+
+Enter keyboard scrollback and selection mode.
+
+No arguments.
+
+## `app.reload`
+
+Reload the app configuration.
+
+No arguments.
+
+## `legacy.prefix_cancel`
+
+Cancel a pending legacy prefix.
+
+No arguments.
+
+## `legacy.prefix_repeat`
+
+Send a repeated legacy prefix to the terminal.
+
+No arguments.
+
+## `legacy.key`
+
+Run an effective legacy key sequence, optionally targeting a previewed space.
+
+| Argument | Required |
+|---|---|
+| `keys` | yes |
+| `space` | no |
+
+## `legacy.plugin`
+
+Run a configured legacy plugin action in the focused pane's context.
+
+| Argument | Required |
+|---|---|
+| `action` | yes |
+| `command` | no |
+| `type` | no |
+
 ## `terminal.peek`
 
 Peek at a running terminal over the tab, with keep-as-tab and close controls.
@@ -270,6 +371,20 @@ Peek at a running terminal over the tab, with keep-as-tab and close controls.
 | Argument | Required |
 |---|---|
 | `terminal` | yes |
+
+## `agent.select`
+
+Focus an agent by its 1-based position in agent order.
+
+| Argument | Required |
+|---|---|
+| `index` | yes |
+
+## `notification.open_target`
+
+Open the target of the latest visible actionable notification.
+
+No arguments.
 
 ## `terminal.show`
 
@@ -294,7 +409,7 @@ No arguments.
 
 ## `terminal.paste_image`
 
-Ctrl+V: the clipboard's image as a file on the focused terminal's machine, when that's another one; on Windows, paste clipboard text; otherwise Ctrl+V goes to the terminal.
+The configured image-paste key: transfer an image to a remote terminal's machine, otherwise paste frontend clipboard text remotely or on Windows; local Unix Ctrl+V goes to the program.
 
 No arguments.
 

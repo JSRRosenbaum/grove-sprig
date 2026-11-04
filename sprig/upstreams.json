@@ -21,7 +21,20 @@
     "upstream": "https://github.com/herdrdev/herdr-core",
     "revision": "421c5ab41857f8b4a5f155c42f763008f455b33d",
     "source_version": "0.1.17",
-    "includes_unreleased": true
+    "includes_unreleased": true,
+    "ghostty_revision": "1e5cdb865807abc990181efb8ebfa9122955cce2",
+    "sprig_patches": [
+      {
+        "path": "sprig/core-patches/core-legacy-clear.patch",
+        "directory": ".",
+        "sha256": "ad887303769ade7f50f7506225726ed89acf0ad80f9813c2348d2bd9990cf626"
+      },
+      {
+        "path": "sprig/core-patches/ghostty-legacy-clear.patch",
+        "directory": "vendor/ghostty",
+        "sha256": "cc3b1856c107b6697fae12ad089d6f1ccce9ba2e3f5cd310e65a847a56659c0d"
+      }
+    ]
   },
   "renderer": {
     "repository": "https://github.com/ghostty-org/ghostty",

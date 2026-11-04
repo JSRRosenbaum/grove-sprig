@@ -1,17 +1,23 @@
 #!/usr/bin/env python3
 """Install or update the Rowan layout without replacing personal configuration."""
 import argparse
+import importlib.util
 from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
 import tempfile
+import tomllib
 import sys
 
 
 ROOT = Path(__file__).resolve().parent
+_compiler_spec = importlib.util.spec_from_file_location('legacy_keys', ROOT / 'legacy_keys.py')
+legacy_keys = importlib.util.module_from_spec(_compiler_spec)
+_compiler_spec.loader.exec_module(legacy_keys)
 MODS = (
     'rowan-spaces', 'rowan-agents', 'rowan-empty', 'rowan-picker',
+    'rowan-navigate', 'rowan-goto', 'rowan-help',
     'square-dracula-tabs', 'square-dracula-pane', 'square-dracula-files',
     'square-dracula-changes', 'square-dracula-menu', 'square-dracula-new-menu',
     'square-dracula-worktree',
@@ -59,21 +65,29 @@ def payload(root):
         files[('app', relative)] = data
     extension = root / 'extensions' / 'rowan-omp-display.ts'
     files[('agent', 'extensions/rowan-omp-display.ts')] = extension.read_bytes()
-    overlay = json_object((root / 'rowan-keys.json').read_bytes(), 'key overlay')
-    if set(overlay) != {'layout:rowan-terminal'} or not isinstance(overlay['layout:rowan-terminal'], dict):
-        raise ValueError('Key overlay must contain only the Rowan layout object')
-    if not all(isinstance(k, str) and isinstance(v, str) for k, v in overlay['layout:rowan-terminal'].items()):
-        raise ValueError('Key overlay bindings must be strings')
-    return files, overlay
+    for helper in ('legacy_plugins.py', 'legacy_worktrees.py', 'legacy_scifi_panel.py', 'legacy_review.py'):
+        files[('app', helper)] = (root / helper).read_bytes()
+    runtime = root / 'plugin_runtimes/workthreads'
+    for required in ('LICENSE', 'herdr_workthreads_cli.py', 'herdr_workthreads/__main__.py', 'herdr_workthreads/__init__.py'):
+        if not (runtime / required).is_file():
+            raise FileNotFoundError(f'Missing source: {runtime / required}')
+    for source in sorted(runtime.rglob('*')):
+        if source.is_file() and (source.suffix == '.py' or source.name == 'LICENSE'
+                                 or source.relative_to(runtime).as_posix() == 'skills/herdr-workthreads/SKILL.md'):
+            files[('app', source.relative_to(root).as_posix())] = source.read_bytes()
+    defaults = json_object((root / 'rowan-keys.json').read_bytes(), 'legacy key defaults')
+    return files, defaults
 
 
-def stage_file(destination, data, prefix):
+def stage_file(destination, data, prefix, mode=None):
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = None
     try:
         with tempfile.NamedTemporaryFile(dir=destination.parent, prefix=prefix, delete=False) as handle:
             temporary = Path(handle.name)
             handle.write(data)
+        if mode is not None:
+            temporary.chmod(mode)
         return temporary
     except Exception:
         if temporary is not None:
@@ -101,7 +115,11 @@ def owned_path(kind, relative):
         raise ValueError('Invalid ownership manifest path')
     if kind == 'app':
         allowed = (len(path.parts) >= 3 and path.parts[0] == 'mods' and path.parts[1] in MODS
-                   or relative in ('layouts/rowan-terminal.json', 'themes/rowan-terminal.json'))
+                   or relative in ('layouts/rowan-terminal.json', 'themes/rowan-terminal.json',
+                                   'legacy_plugins.py', 'legacy_worktrees.py', 'legacy_scifi_panel.py', 'legacy_review.py')
+                   or len(path.parts) >= 3 and path.parts[:2] == ('plugin_runtimes', 'workthreads')
+                   and (path.suffix == '.py' or path.name == 'LICENSE'
+                        or relative == 'plugin_runtimes/workthreads/skills/herdr-workthreads/SKILL.md'))
     else:
         allowed = kind == 'agent' and relative == 'extensions/rowan-omp-display.ts'
     if not allowed:
@@ -109,11 +127,43 @@ def owned_path(kind, relative):
     return path
 
 
-def install(app_home, agent_home, backup_home):
+def install(app_home, agent_home, backup_home, legacy_config=None, legacy_machine_configs=(), legacy_key_source='local'):
     app_home, agent_home, backup_home = (
         Path(p).expanduser().resolve() for p in (app_home, agent_home, backup_home)
     )
-    files, overlay = payload(ROOT)
+    files, defaults = payload(ROOT)
+    config_path = legacy_keys.discover_config(legacy_config)
+    overlay, metadata = legacy_keys.compile_profile(defaults, config_path)
+    if legacy_key_source not in ('local', 'server'):
+        raise ValueError('legacy key source must be local or server')
+    remote_bindings, remote_default = legacy_keys.compile_profile(
+        defaults, config_path, commands_override=[])
+    remote_default['bindings'] = remote_bindings
+    metadata['remote_default'] = remote_default
+    metadata['key_source'] = legacy_key_source
+    metadata['bindings'] = overlay
+    metadata['machines'] = {}
+    for item in legacy_machine_configs:
+        name, separator, source = item.partition('=')
+        if not separator or not name.strip() or name != name.strip() or not source or name.lower() == 'local':
+            raise ValueError('Expected --legacy-machine-config NAME=PATH (NAME must not be local)')
+        if name in metadata['machines']:
+            raise ValueError(f'Duplicate legacy machine profile: {name}')
+        path = legacy_keys.discover_config(source)
+        if legacy_key_source == 'local':
+            with path.open('rb') as stream:
+                endpoint = tomllib.load(stream)
+            endpoint_keys = endpoint.get('keys', {})
+            if not isinstance(endpoint_keys, dict):
+                raise ValueError(f'Legacy keys for {name} must be a TOML table')
+            bindings, machine = legacy_keys.compile_profile(
+                defaults, config_path, validate_local_dependencies=False,
+                commands_override=endpoint_keys.get('command', []))
+        else:
+            bindings, machine = legacy_keys.compile_profile(defaults, path, validate_local_dependencies=False)
+        machine['bindings'] = bindings
+        metadata['machines'][name] = machine
+    metadata['machines'] = dict(sorted(metadata['machines'].items()))
     manifest_path = destination_path(app_home, MANIFEST)
     previous, previous_bindings = set(), {}
     if manifest_path.exists():
@@ -137,15 +187,13 @@ def install(app_home, agent_home, backup_home):
     else:
         defaults = 'keys.macos.json' if sys.platform == 'darwin' else 'keys.json'
         keys = json_object((ROOT.parent / 'defaults' / defaults).read_bytes(), 'platform key defaults')
-    section = keys.get('layout:rowan-terminal', {})
-    if not isinstance(section, dict):
-        raise ValueError('Existing Rowan key section must be an object')
+    # The legacy profile owns these scopes. Keeping newer global or terminal
+    # shortcuts would intercept keys the old terminal passed to its program.
+    # The transaction backs up the complete original keys.json.
+    keys['global'] = {}
+    keys['terminal'] = {}
+    keys.update(overlay)
     current_bindings = overlay['layout:rowan-terminal']
-    for key, value in previous_bindings.items():
-        if key not in current_bindings and section.get(key) == value:
-            del section[key]
-    section.update(current_bindings)
-    keys['layout:rowan-terminal'] = section
     roots = {'app': app_home, 'agent': agent_home}
     for kind, relative in files:
         owned_path(kind, relative)
@@ -155,6 +203,8 @@ def install(app_home, agent_home, backup_home):
         for (kind, relative), data in files.items()
     }
     contents[keys_path] = (json.dumps(keys, indent=2, ensure_ascii=False) + '\n').encode()
+    contents[destination_path(app_home, 'legacy-keys.json')] = (
+        json.dumps(metadata, indent=2, ensure_ascii=False) + '\n').encode()
     new_manifest = {
         'version': 1, 'agent_home': str(agent_home), 'bindings': current_bindings,
         'files': [{'root': kind, 'path': relative} for kind, relative in sorted(files)],
@@ -166,12 +216,15 @@ def install(app_home, agent_home, backup_home):
         destination: destination.read_bytes() if destination.exists() else None
         for destination in destinations
     }
+    original_modes = {destination: destination.stat().st_mode & 0o777
+                      for destination, data in originals.items() if data is not None}
     backup_home.mkdir(mode=0o700, parents=True, exist_ok=False)
     backup_manifest = []
     for index, (destination, data) in enumerate(originals.items()):
         backup = str(index) if data is not None else None
         if backup is not None:
             (backup_home / backup).write_bytes(data)
+            (backup_home / backup).chmod(original_modes[destination])
         backup_manifest.append({'path': str(destination), 'backup': str(backup_home / backup) if backup else None})
     (backup_home / 'manifest.json').write_text(json.dumps(backup_manifest, indent=2) + '\n')
     staged, restores, changed, failed_restores = {}, {}, [], set()
@@ -180,9 +233,11 @@ def install(app_home, agent_home, backup_home):
         # Rollback itself needs only rename/unlink, including after ENOSPC.
         for destination, data in originals.items():
             if data is not None:
-                restores[destination] = stage_file(destination, data, '.sprig-restore-')
+                restores[destination] = stage_file(destination, data, '.sprig-restore-', original_modes[destination])
         for destination, data in contents.items():
-            staged[destination] = stage_file(destination, data, '.sprig-new-')
+            wrapper = destination == destination_path(app_home, 'plugin_runtimes/workthreads/herdr_workthreads_cli.py')
+            mode = 0o755 if wrapper else original_modes.get(destination)
+            staged[destination] = stage_file(destination, data, '.sprig-new-', mode)
         for destination, temporary in staged.items():
             os.replace(temporary, destination)
             changed.append(destination)
@@ -221,6 +276,11 @@ if __name__ == '__main__':
     parser.add_argument('--app-home', type=Path, default=Path(os.environ.get('HERDR_APP_HOME', Path.home() / '.config/herdr-app')))
     parser.add_argument('--agent-home', type=Path, default=Path(os.environ.get('PI_CODING_AGENT_DIR', Path.home() / '.omp/agent')))
     parser.add_argument('--backup-home', type=Path)
+    parser.add_argument('--legacy-config', type=Path, help='Original Herdr config.toml (otherwise discover an unambiguous local config)')
+    parser.add_argument('--legacy-machine-config', action='append', default=[], metavar='NAME=PATH',
+                        help='Original config.toml for a named source machine; repeat for each machine')
+    parser.add_argument('--legacy-key-source', choices=('local', 'server'), default='local',
+                        help='Use local normal keys plus source commands (default), or full source-machine keys')
     args = parser.parse_args()
     backup = args.backup_home or Path.home() / '.local/state/herdr-app' / ('rowan-sidebar-backup-' + datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ'))
-    install(args.app_home, args.agent_home, backup)
+    install(args.app_home, args.agent_home, backup, args.legacy_config, args.legacy_machine_config, args.legacy_key_source)

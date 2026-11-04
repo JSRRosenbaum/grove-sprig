@@ -31,8 +31,13 @@ timer. The window shows PREFIX while it is pending. Configured app chords with a
 effective Escape continuation remain armed until completion/cancellation; ordinary
 chords retain GPUI's timeout. OS deactivation clears the chord without moving focus.
 `status.layout_name` and `herdr.window().layout_name` identify the active key layout.
-`app.help` opens a searchable guide with terminal/layout/global precedence and
-explicit mod-only scopes; the person's configured help shortcut may differ.
+`app.help` opens the key guide (the legacy guide under `rowan-terminal`);
+the person's configured help shortcut may differ.
+Legacy panes support `pane.rename`, `pane.cycle`, `pane.last`, `pane.resize`,
+and `pane.resize_mode`; `terminal.copy_mode`, `terminal.clear`, and
+`terminal.edit_scrollback` act on the focused terminal. `app.reload` explicitly
+reloads configuration. `agent.select` and `notification.open_target` navigate
+to an indexed agent or a visible notification target.
 Do not stop, signal or restart the person's app or core without authorization.
 
 `app.check_updates` checks for newer releases. Settings reports "Up to date"
@@ -40,13 +45,15 @@ only after a successful check; on failure, check the connection and retry.
 
 ## Show something when asked
 
-New spaces and tabs are shown immediately: only create them when asked.
-Pick an explicit, useful name for every new space and tab; don't rely on
-default names. Use IDs from `ls` rather than guessing or acting on the wrong
-focused pane.
+CLI-created spaces leave the current workspace, tab and pane unchanged. When asked
+to show a new space, explicitly `space.select` its returned `space` ID.
+New tabs are still shown immediately. Only create spaces or tabs when asked.
+Pick explicit useful names; use IDs from `ls` rather than guessing targets.
 
 ```sh
 herdr-app do space.new --name api --folder /path/to/api
+# Only when an intentional view switch was requested:
+herdr-app do space.select --id <returned-space-id>
 herdr-app do tab.new --name "fix login" --argv '["claude"]' --task "Look at the login bug"
 herdr-app do pane.split --direction right --pane p12
 herdr-app do agent.focus --terminal t7
@@ -94,6 +101,13 @@ Unlabeled workers stay hidden. Do not add labels just to run a background
 worker. Use app commands when the
 user wants to see a new tab or split, hc for orchestration that need not change
 the screen.
+
+`terminal.paste` sends the frontend clipboard to the focused terminal, local or
+remote. The configured image-paste key transfers remote images and pastes
+frontend text remotely; local Unix Ctrl+V remains the program's key. In the
+legacy layout, Ctrl+Shift+V supplies terminal-side paste unless explicitly
+assigned by the legacy profile. A remote program cannot read the frontend's
+clipboard simply by receiving Ctrl+V.
 
 ## Customize layouts, keys, or mods
 
