@@ -70,9 +70,9 @@ instructions remain available in the [upstream repository](https://github.com/ky
 
 - Select a space or tab by clicking it; right-click for its context menu.
 - The `+` after the last tab opens terminal, agent, space, and worktree actions.
-- New worktree accepts an optional branch name. Leave it blank and press Enter
-  to create an automatically named branch from the current checkout; an explicit
-  existing branch retains its checkout behavior.
+- New worktree immediately creates an automatically named branch from the current
+  checkout and its workspace, without a naming prompt. Open worktree still shows
+  the existing checkout picker; Remove worktree still requires confirmation.
 - Files and Changes buttons open, switch, or close the right panel. The choice is remembered
   per space. Files previews and Changes diffs are read-only; there is no commit-entry row.
 - Hover a terminal header to reveal split-right, split-down, zoom, and close buttons.

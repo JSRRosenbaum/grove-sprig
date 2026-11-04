@@ -11,7 +11,7 @@ const sources = [
 ];
 
 for (const sourcePath of sources) {
-  test(`${path.relative(process.cwd(), sourcePath)}: blank names create distinct worktrees from the current checkout`, async (t) => {
+  test(`${path.relative(process.cwd(), sourcePath)}: New worktree creates its branch and workspace without input`, async (t) => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sprig-worktree-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     const repo = path.join(root, 'repo');
@@ -25,21 +25,35 @@ for (const sourcePath of sources) {
     git('commit', '-qm', 'fixture');
     const head = git('rev-parse', 'HEAD');
     const opened = [];
+    let properties = { folder: repo, action: 'new' };
+    const tasks = [];
+    const cx = {
+      notify() {},
+      focus_handle: () => ({ focus() {} }),
+      timer: { after() {} },
+      spawn(fn) { tasks.push(fn(cx)); },
+    };
     const source = fs.readFileSync(sourcePath, 'utf8').replace(/^import .*;\n/gm, '').replace('export default class Worktree', 'class Worktree');
-    const Worktree = new Function('View', 'exec', 'run', 'props', `${source}; return Worktree;`)(
+    const Worktree = new Function('View', 'exec', 'run', 'props', 'home', 'spaces', 'panes', 'closeOverlay', 'InputState', `${source}; return Worktree;`)(
       class {},
       async (program, args, options) => {
         const r = spawnSync(program, args, { cwd: options.cwd, encoding: 'utf8' });
         return { code: r.status, stdout: r.stdout, stderr: r.stderr };
       },
       (command, args) => opened.push({ command, args }),
-      () => ({}),
+      () => properties, () => root, () => [], () => [], () => {},
+      { new: ({ value }) => ({ value: () => value, on() {}, focus() {} }) },
     );
-    const view = new Worktree();
-    Object.assign(view, { repo: { top: repo, main: repo, name: 'repo' }, userHome: root, text: '', on: null });
-    assert.equal(await view.create(), '');
-    view.text = '   ';
-    assert.equal(await view.create(), '');
+    async function start(props) {
+      properties = { folder: repo, ...props };
+      const view = new Worktree();
+      view.init({}, cx);
+      await Promise.all(tasks.splice(0));
+      assert.equal(view.error, '');
+      return view;
+    }
+    await start({ action: 'new' });
+    await start({ action: 'new', branch: '   ' });
     assert.equal(opened.length, 2);
     const checkouts = opened.map(({ args }) => args.folder);
     assert.notEqual(checkouts[0], checkouts[1]);
@@ -51,8 +65,13 @@ for (const sourcePath of sources) {
     assert.notEqual(branches[0], branches[1]);
     // Explicit names retain their existing branch checkout semantics.
     git('branch', 'chosen-branch');
-    view.text = 'chosen-branch';
-    assert.equal(await view.create(), '');
+    await start({ action: 'new', branch: 'chosen-branch' });
     assert.equal(execFileSync('git', ['-C', opened[2].args.folder, 'branch', '--show-current'], { encoding: 'utf8' }).trim(), 'chosen-branch');
+    // Opening/removing still waits for selection/confirmation; init must not mutate Git.
+    const before = git('worktree', 'list', '--porcelain');
+    await start({ action: 'open' });
+    await start({ action: 'remove' });
+    assert.equal(git('worktree', 'list', '--porcelain'), before);
+    assert.equal(opened.length, 3);
   });
 }
