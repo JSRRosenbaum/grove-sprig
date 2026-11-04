@@ -151,7 +151,7 @@ export default class Worktree extends View {
         if (repo && this.opening) this.list = await checkouts(repo, this.on);
         this.repo = repo;
         cx.notify();
-        if (!this.opening && props()?.action !== "remove") await this.work(cx);
+        if (props()?.action === "new" || (props()?.branch && !this.opening && props()?.action !== "remove")) await this.work(cx);
       } catch (error) { this.repo = null; this.error = String(error); cx.notify(); }
     });
   }
