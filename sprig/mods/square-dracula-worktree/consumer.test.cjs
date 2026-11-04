@@ -52,6 +52,8 @@ for (const sourcePath of sources) {
       assert.equal(view.error, '');
       return view;
     }
+    await start({});
+    assert.equal(opened.length, 0, 'loading a module without a creation request must not create a worktree');
     await start({ action: 'new' });
     await start({ action: 'new', branch: '   ' });
     assert.equal(opened.length, 2);
