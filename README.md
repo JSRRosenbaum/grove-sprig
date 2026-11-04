@@ -71,13 +71,14 @@ Remote work keeps running when your local window closes or your laptop sleeps, a
 
 ## Make it yours
 
-Open the command palette to find an action by name, or open Settings to change fonts, colors, sounds and other preferences.
-The built-in layouts include Herdr, Terminals and Herdr 98.
-A **layout** arranges the window. **Mods** are small JavaScript programs that draw its panels, menus and dialogs.
+A **layout** arranges the native window. **Mods** are trusted JavaScript programs
+that draw panels, menus and dialogs. Save personal layout, mod or key files to
+reload them; a broken edit retains the last good version and reports an error.
+Duplicate shipped layouts/mods before changing their structure.
 
-Duplicate a shipped layout or mod before changing its structure or code. Your copies stay yours; Herdr updates the shipped ones on start.
-Save a personal layout, mod or key file and the window reloads it.
-A broken edit keeps the last good version and reports the error.
+The app's executable and installed state still use `herdr-app`, `rowan-terminal`
+and `rowan-*` names for compatibility. The project name is Sprig; those stable
+runtime IDs are not a second installation.
 
 Ctrl+Shift+P shows every command and its key (Cmd+Shift+P on macOS). Change any key in `keys.json`; see [the keys section](defaults/AGENTS.md#keys-keysjson) of the mod guide for the format, including JSON objects for named, typed command arguments.
 
@@ -94,28 +95,26 @@ Mods are trusted code, not sandboxed extensions. Read [security and privacy](doc
 
 ## For agents
 
+Use herdr-core to run and coordinate programs; use the frontend to change what
+the person sees. Inspect before changing a live view:
+
 ```sh
 herdr-app --skill
-```
-
-This prints the agent guide for driving the window. The herdr-core skill points agents here.
-Use herdr-core for running and coordinating programs; use the app to change what you see.
-
-```sh
-herdr-app ls
-herdr-app status
+herdr-app windows
+herdr-app --window 1 status
+herdr-app --window 1 ls
 herdr-app commands
 ```
 
-The first two inspect the open window. The command list also works without one.
-See the [command reference](docs/commands.md) for arguments.
+An ambiguous or unavailable window target fails rather than guessing.
+[Command reference](docs/commands.md) · [Layouts and mods](docs/mods.md)
 
 ## Build from source
 
-For bugs, mod API requests and code contributions, see [Contributing](CONTRIBUTING.md).
-
-Clone this repo with its submodules. Use Rust 1.95.0 and Zig 0.16.0, the versions used in [CI](.github/workflows/ci.yml).
-Linux needs the development packages listed in that workflow.
+The native Rust app is at the repository root; `sprig/` contains its supported
+customization bundle and legacy integration. Build instructions and system
+prerequisites are in [Contributing](CONTRIBUTING.md) and the
+[CI workflow](.github/workflows/ci.yml).
 
 ```sh
 git clone --recurse-submodules https://github.com/herdrdev/herdr-app.git
@@ -125,19 +124,12 @@ just test
 just install
 ```
 
-Install [just](https://github.com/casey/just) to use these recipes.
-The platform installer builds a release and adds the app to your desktop.
-On Linux it links to this checkout, so keep the checkout in place.
-Quit and reopen Herdr to use the new build.
+`just test-sprig` runs customization checks. `just docs-check` checks generated
+references and CLI examples. For maintainers, build on Ash rather than the live
+Rowan workstation; deploy deliberately without restarting someone else's
+frontend, core or agents. Source builds do not update themselves.
 
 Documentation checks also need [Bun](https://bun.sh): `just docs-check` checks generated pages and CLI examples; `just docs-generate` refreshes the reference pages.
 
-To compare drawing changes on Windows, Linux or macOS, run the same fixed workloads against each build:
-
-```sh
-python scripts/bench.py --bin <app executable> --set spinners --seconds 20
-```
-
-The runner requires `hc` on PATH and uses the Python executable running the script. It prints a unique artifact folder with the run settings, counters and results, then stops its private app, terminals and core. Both sets use Python fixture programs; the default set’s TUI workload replaces historical `btop` measurements. `--only spinners` measures just the quiet native spinner scenario. Keep the window visible and the display awake, and compare the same window activity and display settings; inactive windows may draw at a lower rate. Windows records visibility, foreground activity and display Hz at each measurement boundary; other platforms mark these observations unavailable. Visibility does not establish occlusion. Draws are window render calls. Render-to-paint elapsed time stops before scene finalization, backend drawing, uploads and presentation; it is separate from OS process CPU time. Neither measures physical presentation or the FPS HUD’s derived MAX FPS.
-
-`python scripts/bench_compare.py ghostty --root <artifact folder>` reuses a run’s fake agent for the macOS comparison. Benchmark checks: `python -m unittest discover -s scripts -p test_bench.py`.
+[License](LICENSE) · [Third-party notices](THIRD-PARTY-NOTICES) ·
+[Imported revisions and upgrade boundaries](docs/sprig.md)
