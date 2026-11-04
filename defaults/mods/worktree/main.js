@@ -112,13 +112,13 @@ export default class Worktree extends View {
     this.text = props()?.branch ?? "";
     this.list = undefined; // open: the checkouts, once read
     this.at = 0;
-    this.input = InputState.new({ value: this.text, placeholder: this.opening ? "filter worktrees" : "branch name (optional)" });
-    this.input.on("change", (_e, cx) => { this.text = this.input.value(); this.error = ""; this.at = 0; cx.notify(); });
-    this.input.on("submit", (_e, cx) => this.go(cx));
-    this.inputFocused = true;
-    this.input.on("focus", (_e, cx) => { this.inputFocused = true; cx.notify(); });
-    this.input.on("blur", (_e, cx) => { this.inputFocused = false; cx.notify(); });
-    if (props()?.action !== "remove") {
+    if (this.opening) {
+      this.input = InputState.new({ value: this.text, placeholder: "filter worktrees" });
+      this.input.on("change", (_e, cx) => { this.text = this.input.value(); this.error = ""; this.at = 0; cx.notify(); });
+      this.input.on("submit", () => this.open(this.shown()[this.at]));
+      this.inputFocused = true;
+      this.input.on("focus", (_e, cx) => { this.inputFocused = true; cx.notify(); });
+      this.input.on("blur", (_e, cx) => { this.inputFocused = false; cx.notify(); });
       this.input.focus();
       cx.timer.after(600, () => this.input.focus());
     }
@@ -128,7 +128,7 @@ export default class Worktree extends View {
     this.dirty = false;
     this.unpushed = [];
     this.handle = cx.focus_handle();
-    if (props()?.action === "remove") this.handle.focus();
+    if (!this.opening) this.handle.focus();
     cx.spawn(async (cx) => {
       try {
         if (this.on) {
@@ -148,7 +148,7 @@ export default class Worktree extends View {
         if (repo && this.opening) this.list = await checkouts(repo, this.on);
         this.repo = repo;
         cx.notify();
-        if (props().branch) await this.work(cx);
+        if (!this.opening && props()?.action !== "remove") await this.work(cx);
       } catch (error) { this.repo = null; this.error = String(error); cx.notify(); }
     });
   }
@@ -235,7 +235,7 @@ export default class Worktree extends View {
       cx.stop_propagation();
       return cx.notify();
     }
-    if (e.key === "enter" && props()?.action === "remove") return this.go(cx);
+    if (e.key === "enter") return this.go(cx);
   }
 
   renderOpen(t) {
@@ -318,7 +318,7 @@ export default class Worktree extends View {
             ? !r.linked
               ? "This is the repository's main checkout, not a worktree."
               : `Closes the space and deletes ${tilde(r.top, this.userHome)}. The branch stays.`
-            : `A new space on a checkout in ${tilde(ROOT(this.userHome), this.userHome)}/${r.name}/. Leave the name blank to generate one. An existing branch is checked out; a new one starts from here.`;
+            : `Creating a branch and workspace in ${tilde(ROOT(this.userHome), this.userHome)}/${r.name}/ from this checkout.`;
     const blocked = !r || (remove && !r.linked);
     return v_flex()
       .id("worktree")
@@ -333,19 +333,6 @@ export default class Worktree extends View {
       .child(div().text_color(t.muted).child(detail))
       .when(remove && this.dirty, (el) => el.child(div().text_color(t.blocked).child("It has uncommitted changes: they will be lost.")))
       .when(remove && this.unpushed.length > 0, (el) => el.child(div().text_color(t.blocked).child(`Submodule ${this.unpushed.join(", ")} has commits that aren't pushed anywhere: they will be lost.`)))
-      .when(!remove && !blocked, (el) =>
-        el.child(
-          Input.new(this.input)
-            .h(32)
-            .px(10)
-            .items_center()
-            .rounded(6)
-            .border(1)
-            .border_color(this.inputFocused ? t.accent : t.input)
-            .bg(t.background)
-            .text_color(t.foreground),
-        ),
-      )
       .when(Boolean(this.error), (el) => el.child(div().text_color(t.blocked).child(this.error)))
       .child(div().flex_1())
       .child(
@@ -353,7 +340,7 @@ export default class Worktree extends View {
           .justify_end()
           .text_size(11)
           .text_color(t.dim)
-          .child(this.busy ? "working…" : blocked ? "esc close" : remove ? "↵ remove · esc cancel" : "↵ create · esc cancel"),
+          .child(this.busy ? "working…" : blocked ? "esc close" : remove ? "↵ remove · esc cancel" : this.error ? "↵ retry · esc close" : "creating…"),
       );
   }
 }

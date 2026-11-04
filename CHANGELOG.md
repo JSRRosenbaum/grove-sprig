@@ -3,8 +3,8 @@
 ## Unreleased
 
 ### Fixed
-- Create a new worktree with Enter without first naming it; blank names generate
-  a new branch, while explicit existing branch names still open that branch.
+- New worktree immediately creates an automatically named branch and workspace,
+  without a title prompt or confirmation keystroke.
   (#1, thanks @JSRRosenbaum)
 
 ## [sprig-preview-2026.11.03.2] - 2026-11-03
