@@ -5712,7 +5712,7 @@ mod tests {
         };
         select("home", cx);
         cx.update(|window, cx| view.update(cx, |this, cx| {
-            this.model.add_space("sp1", "", "/tmp", crate::model::Tab::new("tb1", "", "p1", "t1"));
+            this.model.add_space("sp1", "", "/tmp", crate::model::Tab::new("tb1", "", "p1", "t1"), true);
             this.sync(window, cx);
         }));
         cx.run_until_parked();
@@ -5737,7 +5737,7 @@ mod tests {
             "id": "root", "type": "block", "content": { "tab": "active" }
         }));
         cx.update(|window, cx| view.update(cx, |this, cx| {
-            this.model.add_space("sp1", "", "/tmp", crate::model::Tab::new("tb1", "", "p1", "t1"));
+            this.model.add_space("sp1", "", "/tmp", crate::model::Tab::new("tb1", "", "p1", "t1"), true);
             this.sync(window, cx);
             let prompts = |this: &super::AppWindow| this.overlays.iter().filter(|o| o.id == "rename").count();
             this.run("tab.rename", json!({}), window, cx);
@@ -5796,9 +5796,9 @@ mod tests {
             "id": "main", "type": "block", "content": { "tab": "active" }
         }));
         cx.update(|window, cx| view.update(cx, |this, cx| {
-            this.model.add_space("s1", "one", "", crate::model::Tab::new("a", "a", "pa", "t1"));
+            this.model.add_space("s1", "one", "", crate::model::Tab::new("a", "a", "pa", "t1"), true);
             this.model.add_tab("s1", crate::model::Tab::new("b", "b", "pb", "t2"));
-            this.model.add_space("s2", "two", "", crate::model::Tab::new("c", "c", "pc", "t3"));
+            this.model.add_space("s2", "two", "", crate::model::Tab::new("c", "c", "pc", "t3"), true);
             this.model.select_tab("a");
             this.sync(window, cx);
             this.dispatch("terminal.search", &json!({}), true, window, cx);

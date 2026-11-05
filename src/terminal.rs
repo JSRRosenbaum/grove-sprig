@@ -2287,7 +2287,7 @@ mod tests {
         }
         cx.update(gpui_base::init);
         let (root, cx) = cx.add_window_view(|_, cx| Root {
-            terminal: cx.new(|cx| super::TerminalView::attach(crate::hc::offline(), "t1".into(), (40, 5), cx)),
+            terminal: cx.new(|cx| super::TerminalView::attach(crate::hc::offline(), "t1".into(), (40, 5), false, cx)),
             text: cx.new(|cx| TextViewState::markdown("Move the pointer over this selectable text.", cx)),
         });
         cx.run_until_parked();
@@ -2331,12 +2331,12 @@ mod tests {
         cx.update(gpui_base::init);
         let (root, cx) = cx.add_window_view(|_, cx| Root {
             first: cx.new(|cx| {
-                let terminal = super::TerminalView::attach(crate::hc::offline(), "t1".into(), (32, 6), cx);
+                let terminal = super::TerminalView::attach(crate::hc::offline(), "t1".into(), (32, 6), false, cx);
                 terminal.grid.borrow_mut().vt.write(b"alpha result");
                 terminal
             }),
             second: cx.new(|cx| {
-                let terminal = super::TerminalView::attach(crate::hc::offline(), "t2".into(), (32, 6), cx);
+                let terminal = super::TerminalView::attach(crate::hc::offline(), "t2".into(), (32, 6), false, cx);
                 terminal.grid.borrow_mut().vt.write(b"beta result");
                 terminal
             }),
@@ -2388,7 +2388,7 @@ mod tests {
 
         cx.update(gpui_base::init);
         let (root, cx) = cx.add_window_view(|_, cx| Root(cx.new(|cx| {
-            let terminal = super::TerminalView::attach(crate::hc::offline(), "t1".into(), (40, 6), cx);
+            let terminal = super::TerminalView::attach(crate::hc::offline(), "t1".into(), (40, 6), false, cx);
             terminal.grid.borrow_mut().vt.write(b"needle appears here");
             terminal
         })));
@@ -2420,7 +2420,7 @@ mod tests {
         use gpui::*;
 
         cx.update(gpui_base::init);
-        let terminal = cx.new(|cx| super::TerminalView::attach(crate::hc::offline(), "t1".into(), (40, 6), cx));
+        let terminal = cx.new(|cx| super::TerminalView::attach(crate::hc::offline(), "t1".into(), (40, 6), false, cx));
         let (_, cx) = cx.add_window_view(|_, _| gpui::Empty);
         cx.update(|window, app| terminal.update(app, |terminal, cx| {
             terminal.open_search(window, cx);
@@ -2467,7 +2467,7 @@ mod tests {
         let bindings = crate::keys::parse(crate::keys::DEFAULTS).expect("shipped keys parse");
         cx.update(|app| crate::keys::install(bindings, app));
         let (root, cx) = cx.add_window_view(|_, cx| {
-            Root(cx.new(|cx| super::TerminalView::attach(crate::hc::offline(), "t1".into(), (40, 6), cx)))
+            Root(cx.new(|cx| super::TerminalView::attach(crate::hc::offline(), "t1".into(), (40, 6), false, cx)))
         });
         cx.run_until_parked();
         let aliases: &[(&str, &str)] = if cfg!(target_os = "macos") {
@@ -2512,7 +2512,7 @@ mod tests {
 
         cx.update(gpui_base::init);
         let (root, cx) = cx.add_window_view(|_, cx| Root(cx.new(|cx| {
-            let terminal = super::TerminalView::attach(crate::hc::offline(), "t1".into(), (40, 6), cx);
+            let terminal = super::TerminalView::attach(crate::hc::offline(), "t1".into(), (40, 6), false, cx);
             terminal.grid.borrow_mut().vt.write(b"needle appears here");
             terminal
         })));
@@ -2565,7 +2565,7 @@ mod tests {
 
         cx.update(gpui_base::init);
         let (root, cx) = cx.add_window_view(|_, cx| Root(cx.new(|cx| {
-            let terminal = super::TerminalView::attach(crate::hc::offline(), "t1".into(), (40, 5), cx);
+            let terminal = super::TerminalView::attach(crate::hc::offline(), "t1".into(), (40, 5), false, cx);
             terminal.grid.borrow_mut().vt.write(b"old alpha\r\nbetween\r\nnew alpha");
             terminal
         })));
@@ -2618,7 +2618,7 @@ mod tests {
 
         cx.update(gpui_base::init);
         let (root, cx) = cx.add_window_view(|_, cx| Root(cx.new(|cx| {
-            super::TerminalView::attach(crate::hc::offline(), "t1".into(), (40, 6), cx)
+            super::TerminalView::attach(crate::hc::offline(), "t1".into(), (40, 6), false, cx)
         })));
         cx.run_until_parked();
 
@@ -2668,7 +2668,7 @@ mod tests {
 
         cx.update(gpui_base::init);
         let (root, cx) = cx.add_window_view(|_, cx| Root(cx.new(|cx| {
-            super::TerminalView::attach(crate::hc::offline(), "t1".into(), (40, 6), cx)
+            super::TerminalView::attach(crate::hc::offline(), "t1".into(), (40, 6), false, cx)
         })));
         cx.run_until_parked();
 
@@ -2737,7 +2737,7 @@ mod tests {
         let bindings = crate::keys::parse(crate::keys::DEFAULTS).expect("shipped keys parse");
         cx.update(|app| crate::keys::install(bindings, app));
         let (root, cx) = cx.add_window_view(|_, cx| {
-            Root(cx.new(|cx| super::TerminalView::attach(crate::hc::offline(), "t1".into(), (40, 6), cx)))
+            Root(cx.new(|cx| super::TerminalView::attach(crate::hc::offline(), "t1".into(), (40, 6), false, cx)))
         });
         cx.run_until_parked();
         cx.update(|window, app| {
@@ -3049,7 +3049,7 @@ mod tests {
         }
         cx.update(gpui_base::init);
         let (root, cx) = cx.add_window_view(|_, cx| {
-            Root(cx.new(|cx| super::TerminalView::attach(crate::hc::offline(), "t1".into(), (40, 5), cx)))
+            Root(cx.new(|cx| super::TerminalView::attach(crate::hc::offline(), "t1".into(), (40, 5), false, cx)))
         });
         cx.run_until_parked();
         let terminal = root.read_with(cx, |root, _| root.0.clone());

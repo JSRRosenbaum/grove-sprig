@@ -48,7 +48,7 @@ fn initial_pane_size(cx: &mut gpui::TestAppContext) {
             let mut tab = super::Tab::new("tab", "", "a", "probe-a");
             tab.root = root.clone();
             tab.focus(&target);
-            this.model.add_space("space", "test", "/", tab);
+            this.model.add_space("space", "test", "/", tab, true);
             this.sync(window, cx);
         });
         cx.update(|window, cx| window.draw(cx).clear(cx));
@@ -100,7 +100,7 @@ fn hidden_tabs_follow(cx: &mut gpui::TestAppContext) {
         let mut tab = super::Tab::new("ta", "", "a", "probe-a");
         tab.root = root;
         tab.focus("a2");
-        this.model.add_space("space", "test", "/", tab);
+        this.model.add_space("space", "test", "/", tab, true);
         this.model.add_tab("space", super::Tab::new("tb", "", "b", "probe-b"));
         this.sync(window, cx);
     });
