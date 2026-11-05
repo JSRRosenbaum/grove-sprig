@@ -720,9 +720,9 @@ export default class Spaces extends View {
     const keys = this.herd().members;
     return keys.flatMap(k => out.filter(r => this.machineKey(r.w.machine) === k && this.shown.has(r.w.id)));
   }
-  row(r, t, compact) {
+  row(r, t, compact, machines) {
     const w = r.w, active = w.active;
-    const ready = machines().some(m => m.name === w.machine && m.layout === "ready");
+    const ready = machines.some(m => m.name === w.machine && m.layout === "ready");
     const status = r.groupStatus ?? w.status;
     const drop = this.drag?.moved && this.drag.over === w.id;
     const all = drop ? spaces() : [];
@@ -761,12 +761,12 @@ export default class Spaces extends View {
           .on_click((_e,cx) => { cx.stop_propagation(); this.moveSpace(w, 1); }).child("↓")))
       .child(div().w(Math.ceil(this.metrics.fontSize * 2.8)).flex_none().text_right().text_color(t.muted).child(this.label(w) || "…"));
   }
-  grouped(t, compact, rows) {
+  grouped(t, compact, rows, machines) {
     const h = this.herd();
     const keys = h.members;
     return keys.flatMap((key, index) => {
       const machine = this.machineName(key);
-      const layout = machines().find(m => m.name === machine)?.layout;
+      const layout = machines.find(m => m.name === machine)?.layout;
       const repair = this.reconnecting[machine];
       const profile = this.machines.find(m => m.name === machine) ?? repair?.machine;
       const rebuilt = this.rebuilt(profile) || Boolean(repair);
@@ -813,7 +813,7 @@ export default class Spaces extends View {
       if (folded || rebuilt) return [head, ...menu];
       const content = [], emitted = new Set();
       for (const r of mine) {
-        if (!r.g) { content.push(this.row(r,t,compact)); continue; }
+        if (!r.g) { content.push(this.row(r,t,compact,machines)); continue; }
         const repo = r.g.repo;
         if (emitted.has(repo)) continue;
         emitted.add(repo);
@@ -821,9 +821,9 @@ export default class Spaces extends View {
         const root = group.find(child => !child.g.linked) || group[0];
         const rest = group.filter(child => child !== root);
         const groupStatus = closed ? ["blocked", "done", "working", "idle"].find(status => group.some(child => child.w.status === status)) : null;
-        content.push(this.row({...root, groupStatus, foldRepo: rest.length ? repo : null}, t, compact));
+        content.push(this.row({...root, groupStatus, foldRepo: rest.length ? repo : null}, t, compact, machines));
         for (const [index, child] of rest.entries()) if (!closed || child.w.active) {
-          content.push(this.row({...child, tree: child.g.linked ? (index === rest.length - 1 ? "└─" : "├─") : null}, t, compact));
+          content.push(this.row({...child, tree: child.g.linked ? (index === rest.length - 1 ? "└─" : "├─") : null}, t, compact, machines));
         }
       }
       return [head, ...menu, ...content];
@@ -831,6 +831,9 @@ export default class Spaces extends View {
   }
   render(cx) {
     const t = theme(), compact = shared("sidebar.collapsed") === true, sp = spaces(), ps = panes();
+    // One machine inventory per render: readiness and the headings read this,
+    // not a fresh host conversion for every row.
+    const inventory = machines();
     this.metrics = this.fontMetrics();
     const metricKey = JSON.stringify(this.metrics);
     if (metricKey !== this.metricKey) {
@@ -840,8 +843,9 @@ export default class Spaces extends View {
     this.inventory(sp); this.remember(sp, ps);
     const h = this.herd(), scoped = sp.filter(s => h.members.includes(this.machineKey(s.machine)));
     const current = scoped.find(s => s.id === focused()?.space);
-    const selectedReady = Boolean(current && machines().some(m => m.name === current.machine && m.layout === "ready"));
-    const scope = {herd: h.id, machineKeys: h.members.map(key => this.machineName(key) ?? "@local"), spaceIds: scoped.map(s => s.id), orderedIds: this.ordered().map(r => r.w.id), labels: Object.fromEntries(scoped.map(s => [s.id, this.label(s)])), selectedReady, empty: scoped.length === 0};
+    const selectedReady = Boolean(current && inventory.some(m => m.name === current.machine && m.layout === "ready"));
+    const rows = this.ordered();
+    const scope = {herd: h.id, machineKeys: h.members.map(key => this.machineName(key) ?? "@local"), spaceIds: scoped.map(s => s.id), orderedIds: rows.map(r => r.w.id), labels: Object.fromEntries(scoped.map(s => [s.id, this.label(s)])), selectedReady, empty: scoped.length === 0};
     const surface = selectedReady ? "rowan-workspace" : "rowan-empty";
     if (surface !== this.surfaceDesired) {
       this.surfaceDesired = surface;
@@ -851,7 +855,6 @@ export default class Spaces extends View {
     }
     const json = JSON.stringify(scope);
     if (json !== this.scopeJson) { this.scopeJson = json; setShared("rowan.sidebar.scope", scope); }
-    const rows = this.ordered();
     const tabs = h_flex().w_full().h(this.metrics.rowHeight + 6).flex_none().px(14).gap(3).items_center().justify_center().text_size(this.metrics.fontSize).text_color(t.muted);
     for (const item of this.state.herds) tabs.child(div().id(`herd-${item.id}`).px(5).py(3).cursor_pointer().when(item.id === h.id, e => e.bg(t.selected).text_color(t.foreground)).hover(e => e.bg(t.hover)).on_click((_e,cx) => { this.switchHerd(item.id); cx.notify(); }).child(String(item.id)));
     tabs.child(div().id("herd-add").px(5).cursor_pointer().hover(e => e.bg(t.hover)).on_click((_e,cx) => { this.addHerd(); cx.notify(); }).child("+"));
@@ -872,7 +875,7 @@ export default class Spaces extends View {
       .on_hover((on, cx) => { if (!on) this.cancelDrag(cx); })
       .child(v_flex().flex_1().min_h(0).overflow_y_scrollbar().mode("always")
         .when(h.members.length === 0, e => e.child(div().id("empty-herd").px(12).py(8).text_color(t.dim).child("Empty herd — move a machine here from its heading menu.")))
-        .children(this.grouped(t, compact, rows)))
+        .children(this.grouped(t, compact, rows, inventory)))
       .child(h_flex().id("sidebar-help").h(this.metrics.rowHeight + 4).flex_none().items_center().justify_center()
         .child(ratioControl("sidebar-help-button", compact ? "?" : "Keys", helpHint, () => legacyHelp ? run("mod.open", {name: "rowan-help"}) : run("app.help"))))
       .when(!compact, e => e.child(h_flex().id("sidebar-font-controls").px(14)
