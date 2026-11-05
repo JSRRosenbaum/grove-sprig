@@ -51,6 +51,14 @@ shipped `rowan-terminal` layout loads the Sprig bundle — the 14 `rowan-*` and
 execute, and a background `space.new` creates a workspace from the repository
 without stealing the window's view.
 
+The slot-reuse test claimed the next window in the same instant it released a
+lease. Under the full parallel suite the released lock was not yet visible to
+that claim, which walked past the slot and took a fresh one: 3 failures in 10
+full-suite runs on this tree, 0 in 10 on the pre-rebase tree, 0 in 5 serial
+runs, 0 in 12 module-only runs and 0 in 33 runs that logged the claim. The test
+now retries until the released slot answers, which keeps the assertion exact
+and removes the window.
+
 ## Durable workspace grouping — 2026-11-03
 
 Sprig now persists repository membership in a separate `sprig-sidebar` document
