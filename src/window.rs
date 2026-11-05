@@ -645,6 +645,7 @@ impl AppWindow {
         }));
         w._pending_activation = Some(cx.observe_window_activation(window, |this, window, cx| {
             if !window.is_window_active() {
+                this.drag_from = None;
                 this.legacy_resize_pane = None;
                 if window.has_pending_keystrokes() {
                     window.clear_pending_keystrokes(cx);
@@ -5238,8 +5239,7 @@ impl Render for AppWindow {
                 }
             }))
             .capture_any_mouse_down(cx.listener(|this, ev: &MouseDownEvent, _, _| this.pointer = ev.position))
-            .on_mouse_move(cx.listener(|this, ev: &MouseMoveEvent, window, cx| {
-                this.drag_window(ev, window);
+            .on_mouse_move(cx.listener(|this, ev: &MouseMoveEvent, _window, cx| {
                 if this.drag.is_none() {
                     return;
                 }
@@ -5253,7 +5253,6 @@ impl Render for AppWindow {
                 cx.notify();
             }))
             .on_mouse_up(MouseButton::Left, cx.listener(|this, _, window, cx| {
-                this.drag_from = None;
                 if this.drag.take().is_some() {
                     this.save();
                     // Mods see the new sizes (the sidebar picks its rail by width).
@@ -5261,6 +5260,8 @@ impl Render for AppWindow {
                     this.flush_documents(false, window, cx);
                 }
             }))
+            // Register before descendants, which may consume pointer events.
+            .child(self.window_drag_tracker(cx))
             .child(tree)
             .children(overlays)
             .children(tracker)
@@ -5332,6 +5333,74 @@ fn changed_asset_paths(home: &std::path::Path, changed: &[std::path::PathBuf]) -
 mod tests {
     use gpui::{div, point, px, size, Context, IntoElement, Render, TestAppContext, Window};
     use gpui::prelude::*;
+
+    // TestWindow has no native HWND, so this checks that GPUI reaches the
+    // hand-off, not that Windows enters its modal move loop.
+    #[cfg(windows)]
+    #[test]
+    fn custom_caption_tracks_captured_pointer_outside_client() {
+        in_own_process("custom_caption_outside_client");
+    }
+
+    #[cfg(windows)]
+    #[gpui::test]
+    fn custom_caption_outside_client(cx: &mut TestAppContext) {
+        use gpui::{Modifiers, MouseButton};
+        use serde_json::json;
+        if !running_alone("custom_caption_outside_client") {
+            return;
+        }
+
+        let child = r#"import { View, div } from "gpui-kit";
+import { setShared } from "herdr";
+export default class Child extends View {
+  render() {
+    return div().size_full().child(div().id("selection").w(40).h_full()
+      .on_mouse_down("left", (_event, cx) => { cx.stop_propagation(); setShared("drag.selection", "pressed"); })
+      .on_mouse_up("left", () => setShared("drag.selection", "selected")));
+  }
+}
+"#;
+        let layout = json!({
+            "id": "root", "type": "column", "titlebar": "none",
+            "children": [{
+                "id": "header", "type": "block", "size": { "px": 21 },
+                "window_drag": true, "content": { "mod": "drag-child" }
+            }]
+        });
+        let (view, cx) = open_window(cx, "drag-child", child, layout);
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        let bounds = view.update(cx, |this, _| this.bounds.borrow().get("header").copied().unwrap());
+        let blank = point(bounds.left() + px(80.), bounds.top() + px(12.));
+        let outside = point(blank.x, px(-2.));
+        let control = point(bounds.left() + px(10.), bounds.top() + px(12.));
+        let modifiers = Modifiers::default();
+        let pending = |cx: &mut gpui::VisualTestContext| view.update(cx, |this, _| this.drag_from);
+
+        // The captured HWND receives this move even though the root hitbox is no
+        // longer hovered. It must hand off before the pointer returns inside.
+        cx.simulate_mouse_down(blank, MouseButton::Left, modifiers);
+        assert_eq!(pending(cx), Some(blank));
+        cx.simulate_mouse_move(outside, Some(MouseButton::Left), modifiers);
+        assert_eq!(pending(cx), None, "outside threshold move must reach the window move hand-off");
+        cx.simulate_mouse_up(outside, MouseButton::Left, modifiers);
+
+        // A release outside, without a delivered move, must cancel the press.
+        cx.simulate_mouse_down(blank, MouseButton::Left, modifiers);
+        assert_eq!(pending(cx), Some(blank));
+        cx.simulate_mouse_up(outside, MouseButton::Left, modifiers);
+        assert_eq!(pending(cx), None, "outside release must clear the pending press");
+
+        // A child that consumes its down remains clickable/selectable and does
+        // not start a window move when its pointer moves.
+        cx.simulate_mouse_down(control, MouseButton::Left, modifiers);
+        assert_eq!(crate::mods::shared("drag.selection"), Some(json!("pressed")));
+        assert_eq!(pending(cx), None);
+        cx.simulate_mouse_move(point(control.x + px(10.), control.y), Some(MouseButton::Left), modifiers);
+        assert_eq!(pending(cx), None);
+        cx.simulate_mouse_up(control, MouseButton::Left, modifiers);
+        assert_eq!(crate::mods::shared("drag.selection"), Some(json!("selected")));
+    }
 
     #[test]
     fn going_back_into_a_split_column_takes_its_top_pane_whatever_the_fractions() {

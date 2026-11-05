@@ -112,6 +112,33 @@ impl AppWindow {
         }))
     }
 
+    /// Track a titlebar press across the whole window, including outside its bounds.
+    pub(super) fn window_drag_tracker(&self, cx: &mut Context<Self>) -> AnyElement {
+        let this = cx.entity().downgrade();
+        canvas(
+            |_, _, _| {},
+            move |_, _, window, _| {
+                let t = this.clone();
+                window.on_mouse_event(move |ev: &MouseDownEvent, phase, _, cx| {
+                    if phase == DispatchPhase::Capture && ev.button == MouseButton::Left {
+                        let _ = t.update(cx, |this, _| this.drag_from = None);
+                    }
+                });
+                let t = this.clone();
+                window.on_mouse_event(move |ev: &MouseMoveEvent, phase, window, cx| {
+                    if phase == DispatchPhase::Capture {
+                        let _ = t.update(cx, |this, _| this.drag_window(ev, window));
+                    }
+                });
+                window.on_mouse_event(move |ev: &MouseUpEvent, phase, _, cx| {
+                    if phase == DispatchPhase::Capture && ev.button == MouseButton::Left {
+                        let _ = this.update(cx, |this, _| this.drag_from = None);
+                    }
+                });
+            },
+        ).absolute().size_full().into_any_element()
+    }
+
     /// The root's pointer moves: a press on a drag node that moved far enough moves the window.
     pub(super) fn drag_window(&mut self, ev: &MouseMoveEvent, window: &mut Window) {
         let Some(from) = self.drag_from else { return };
