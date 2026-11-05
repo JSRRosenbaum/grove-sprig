@@ -24,6 +24,29 @@ from the same parts you have.
 
 `herdr-app` controls this app; `hc` controls herdr-core.
 
+## Multiple windows in the Rowan fork
+
+Each ordinary `herdr-app` launch opens another window on the same configuration
+and herdr-core. It does not duplicate running terminals. Windows keep independent
+selection, sidebar/mod state, layout clicks and placement; spaces, tabs and splits
+are shared core structure. Closing one window leaves the others and core running.
+Configuration files and mod code are shared and hot-reload in every window.
+
+Use `herdr-app windows` to discover live numeric window IDs. Target a specific
+one with `herdr-app --window 2 status`, `ls`, `shot <file>` or `do <command>`.
+With no explicit target, the only live window or the uniquely active one is used.
+An ambiguous selection or missing explicit ID fails instead of changing another
+window. Do not launch a window merely to inspect it.
+
+Slot 1 retains the existing view-state paths below. Additional windows use
+`views/<id>/` for `view.json`, `shared.json`, mod `data/`, `seen.json`,
+`window.json`, `windows.json` and `layouts/.state/`. Slots are OS-locked for the
+window's lifetime and reused after closing; a new slot starts with a copy of
+the primary slot's saved JSON state, not another configuration profile.
+`installed.json` and source configuration remain shared. Automatic completion
+and blocked sounds have one owner across windows; explicit sound previews are
+unaffected.
+
 ## What you can and can't do
 
 You can: rearrange and restyle the whole window (layouts), rebind any key,
@@ -69,7 +92,7 @@ images, overlays, popups and floats. It captures the app, not the desktop,
 at the window’s physical pixel size, even when covered or minimized. No
 screen-recording permission is needed. Herdr must be running; before its
 first frame or during GPU recovery it reports an error instead of a PNG.
-`HERDR_APP_HOME` selects which running window to ask, as with `status`.
+`HERDR_APP_HOME` selects the configuration; `--window <id>` selects a live window.
 
 ## The files
 

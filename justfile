@@ -42,7 +42,7 @@ pre-release: test docs-check
 build:
     cargo build --locked
 
-test:
+test: test-sprig
     bun test scripts/files.test.ts scripts/picker.test.ts scripts/palette.test.ts scripts/agents.test.ts scripts/spaces.test.ts scripts/worktree.test.ts
     cargo test --locked
 

@@ -60,6 +60,10 @@ client's usual order.
 In the desktop app, mods pin with `terminal.pin {terminal, pinned}` and
 read `pinned` from `agents()`; they never write the label themselves.
 
+Sprig also writes `herdr.pin-migrated=1` alongside each pin or unpin. Its
+agent sidebar uses this marker to avoid restoring a legacy local pin after a
+person has changed that terminal's shared pin state.
+
 ## Adding more
 
 Labels suit small values that change at human speed. Use the `herdr.`

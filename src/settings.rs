@@ -638,8 +638,8 @@ thread_local! {
         RefCell::new((Rc::new(Settings::default()), Rc::new(resolve(&GRAPHITE, &BTreeMap::new()))));
 }
 
-const ZOOM_MIN: f32 = 0.5;
-const ZOOM_MAX: f32 = 3.0;
+pub(crate) const ZOOM_MIN: f32 = 0.5;
+pub(crate) const ZOOM_MAX: f32 = 3.0;
 
 pub fn get() -> Rc<Settings> {
     CURRENT.with(|c| c.borrow().0.clone())

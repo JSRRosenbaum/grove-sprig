@@ -145,7 +145,6 @@ glibc 2.44; no macOS or ARM binaries are included.
 - The command palette scrolls smoothly. (#348, thanks @patrick-xin)
 - Add machine lists hosts from Include files in ~/.ssh/config. (#328, thanks @ashrodan)
 - Selected text in mod text views stays readable.
-
 ## [0.1.12] - 2026-11-02
 <!-- spotlight macos -->
 
@@ -236,6 +235,19 @@ glibc 2.44; no macOS or ARM binaries are included.
 - `herdr-app check` no longer crashes on mods with scrolling lists or layout animations.
 
 ## [0.1.9] - 2026-10-30
+
+### Unofficial Rowan fork additions - 2026-10-31
+- Ordinary launches open concurrent windows on the same configuration and core.
+- Each window keeps separately locked, persistent view/mod state; shared configuration
+  and core terminals are not duplicated.
+- `herdr-app windows` lists live windows; `--window <id>` explicitly targets CLI
+  inspection and commands. Ambiguous requests fail instead of guessing a window.
+- Automatic completion/blocked sounds have one owner across windows.
+- Pending native chords show a bottom PREFIX bar after the sidebar, following
+  its resized/hidden edge with left-aligned cancellation/help hints. App chords
+  with an effective Escape continuation stay armed until completion or cancellation.
+- The key guide filters to the active layout and terminal binding precedence,
+  uses readable action labels, and searches both shortcuts and actions.
 
 ### Fixed
 - On macOS, updates keep Herdr's Apple signature again, so macOS stops forgetting the permissions you gave Herdr.

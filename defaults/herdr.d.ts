@@ -257,7 +257,8 @@ export function commands(): { name: string; args: { name: string; required: bool
 
 /** The window, for layouts that draw their own title bar (`"titlebar": "none"`). `buttons`:
  *  the system draws no window buttons, so draw them (`window.minimize`, `window.maximize`,
- *  `window.close`); on macOS the traffic lights always stay. Live. */
+ *  `window.close`); on macOS the traffic lights always stay. Live.
+ *  Null when no window snapshot exists, including standalone `herdr-app check`. */
 export function window(): {
   platform: "linux" | "macos" | "windows";
   titlebar: "system" | "none";

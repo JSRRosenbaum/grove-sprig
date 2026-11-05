@@ -787,20 +787,6 @@ impl TerminalView {
             // leak its keystrokes into the shell running in this terminal.
             return;
         }
-
-
-    /// Relay a repeated legacy prefix using the terminal's current keyboard mode.
-    pub fn send_legacy_prefix(&mut self, key: &Keystroke) -> bool {
-        let bytes = legacy_prefix_bytes(&mut self.grid.borrow_mut().vt, key);
-        if let Some(bytes) = bytes {
-            self.send(&bytes);
-            true
-        } else {
-            false
-        }
-    }
-
-    fn key_down(&mut self, ev: &KeyDownEvent, _w: &mut Window, cx: &mut Context<Self>) {
         let k = &ev.keystroke;
         if self.copy_mode.is_some() {
             self.copy_key(k, cx);
@@ -820,6 +806,17 @@ impl TerminalView {
         if let Some(bytes) = bytes {
             self.send(&bytes);
             cx.stop_propagation();
+        }
+    }
+
+    /// Relay a repeated legacy prefix using the terminal's current keyboard mode.
+    pub fn send_legacy_prefix(&mut self, key: &Keystroke) -> bool {
+        let bytes = legacy_prefix_bytes(&mut self.grid.borrow_mut().vt, key);
+        if let Some(bytes) = bytes {
+            self.send(&bytes);
+            true
+        } else {
+            false
         }
     }
 

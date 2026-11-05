@@ -102,7 +102,7 @@ const SHIPPED_MACOS_KEYS: &[&str] = &[
     include_str!("keys/shipped/v0.1.5-keys.macos.json"),
 ];
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, serde::Serialize)]
 #[serde(untagged)]
 enum Binding {
     String(String),
@@ -461,6 +461,187 @@ pub(crate) fn prefix_hints(window: &gpui::Window) -> Vec<(String, &'static str)>
 }
 #[cfg(test)]
 mod tests {
+    use gpui::{div, Context, FocusHandle, IntoElement, KeyBinding, Render, Subscription, TestAppContext, Window};
+    use gpui::prelude::*;
+    use gpui_shell::action::ShellAction;
+
+    struct PendingView {
+        focus: FocusHandle,
+        context: String,
+        leaf_context: Option<&'static str>,
+        actions: Vec<String>,
+        raw: Vec<String>,
+        changes: usize,
+        _pending: Subscription,
+    }
+
+    impl PendingView {
+        fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+            let pending = cx.observe_pending_input(window, |view, window, cx| {
+                view.changes += 1;
+                super::hold_cancelable_prefix(window, &cx.entity(), cx);
+                cx.notify();
+            });
+            Self { focus: cx.focus_handle(), context: "Herdr".into(), leaf_context: None, actions: Vec::new(), raw: Vec::new(), changes: 0, _pending: pending }
+        }
+    }
+
+    impl Render for PendingView {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            div().key_context(self.context.as_str())
+                .when(self.leaf_context.is_none(), |d| d.track_focus(&self.focus))
+                .when_some(self.leaf_context, |d, context| d.child(div().key_context(context).track_focus(&self.focus)))
+                .on_key_down(cx.listener(|view, event: &gpui::KeyDownEvent, _, _| view.raw.push(event.keystroke.unparse())))
+                .on_action(cx.listener(|view, action: &ShellAction, _, _| view.actions.push(action.id().to_owned())))
+        }
+    }
+
+    #[gpui::test]
+    fn pending_chords_follow_gpui_transitions(cx: &mut TestAppContext) {
+        cx.update(|cx| cx.bind_keys([
+            KeyBinding::new("ctrl-space", ShellAction::new("test.cancel"), Some("Herdr")),
+            KeyBinding::new("ctrl-space escape", ShellAction::new("test.cancel"), Some("Herdr")),
+            KeyBinding::new("ctrl-space c", ShellAction::new("test.follow"), Some("Herdr")),
+            KeyBinding::new("ctrl-x", ShellAction::new("test.short"), Some("Herdr")),
+            KeyBinding::new("ctrl-x c", ShellAction::new("test.long"), Some("Herdr")),
+        ]));
+        let (view, cx) = cx.add_window_view(PendingView::new);
+        let focus = view.update(cx, |view, _| view.focus.clone());
+        cx.update(|window, cx| {
+            window.focus(&focus, cx);
+            window.activate_window();
+        });
+        cx.run_until_parked();
+
+        cx.simulate_keystrokes("ctrl-space");
+        cx.run_until_parked();
+        cx.update(|window, _| {
+            assert_eq!(super::pending_keys(window), ["ctrl-space"]);
+            assert!(window.pending_input().unwrap().timeout().unwrap().is_paused());
+        });
+        cx.executor().advance_clock(std::time::Duration::from_secs(2));
+        cx.run_until_parked();
+        cx.update(|window, _| assert_eq!(super::pending_keys(window), ["ctrl-space"]));
+        view.read_with(cx, |view, _| assert!(view.changes < 10));
+        cx.simulate_keystrokes("c");
+        cx.run_until_parked();
+        cx.update(|window, _| assert!(super::pending_keys(window).is_empty()));
+        view.read_with(cx, |view, _| assert_eq!(view.actions, ["test.follow"]));
+
+        cx.simulate_keystrokes("ctrl-space escape");
+        cx.run_until_parked();
+        cx.update(|window, _| assert!(super::pending_keys(window).is_empty()));
+        view.read_with(cx, |view, _| assert_eq!(view.actions, ["test.follow", "test.cancel"]));
+
+        cx.simulate_keystrokes("ctrl-space");
+        cx.run_until_parked();
+        cx.simulate_keystrokes("z");
+        cx.run_until_parked();
+        cx.update(|window, _| assert!(super::pending_keys(window).is_empty()));
+        view.read_with(cx, |view, _| assert_eq!(view.actions.iter().filter(|a| a.as_str() == "test.follow").count(), 1));
+
+        cx.simulate_keystrokes("ctrl-space");
+        cx.run_until_parked();
+        cx.update(|window, cx| window.focus(&cx.focus_handle(), cx));
+        cx.run_until_parked();
+        cx.update(|window, _| assert!(super::pending_keys(window).is_empty()));
+        cx.update(|window, cx| window.focus(&focus, cx));
+        cx.run_until_parked();
+
+        cx.simulate_keystrokes("ctrl-x");
+        cx.run_until_parked();
+        cx.update(|window, _| assert!(!window.pending_input().unwrap().timeout().unwrap().is_paused()));
+        cx.executor().advance_clock(std::time::Duration::from_secs(2));
+        cx.run_until_parked();
+        cx.update(|window, _| assert!(super::pending_keys(window).is_empty()));
+        view.read_with(cx, |view, _| assert_eq!(view.actions.last().unwrap(), "test.short"));
+    }
+
+    #[gpui::test]
+    fn legacy_unknown_continuation_is_not_replayed_to_focused_input(cx: &mut TestAppContext) {
+        cx.update(|cx| cx.bind_keys([
+            KeyBinding::new("ctrl-space escape", ShellAction::new("legacy.prefix_cancel"), Some("Herdr")),
+            KeyBinding::new("ctrl-space c", ShellAction::new("test.follow"), Some("Herdr")),
+        ]));
+        let (view, cx) = cx.add_window_view(PendingView::new);
+        let focus = view.update(cx, |view, _| view.focus.clone());
+        let interceptor = cx.update(|window, cx| {
+            let id = window.window_handle().window_id();
+            window.focus(&focus, cx);
+            cx.intercept_keystrokes(move |event, window, cx| {
+                if window.window_handle().window_id() == id && super::consume_unknown_legacy(window, &event.keystroke, cx) {
+                    cx.stop_propagation();
+                }
+            })
+        });
+        cx.run_until_parked();
+        cx.simulate_keystrokes("ctrl-space z");
+        cx.run_until_parked();
+        cx.update(|window, _| assert!(super::pending_keys(window).is_empty()));
+        view.read_with(cx, |view, _| assert!(view.raw.is_empty()));
+        cx.simulate_keystrokes("ctrl-space c");
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| assert_eq!(view.actions, ["test.follow"]));
+        drop(interceptor);
+    }
+
+    #[gpui::test]
+    fn endpoint_profiles_do_not_steal_another_windows_shortcuts(cx: &mut TestAppContext) {
+        let text = |action| serde_json::json!({"layout:rowan-terminal":{"ctrl-alt-up":action}}).to_string();
+        let mut bindings = super::parse_scoped(&text("space.prev"), Some("HerdrLegacy && legacy_profile == local")).unwrap();
+        bindings.extend(super::parse_scoped(&text("pane.go:up"), Some("HerdrLegacy && legacy_profile == machine0")).unwrap());
+        bindings.extend(super::parse_scoped(r#"{"global":{"ctrl-shift-t":"tab.new"}}"#, Some("!HerdrLegacy")).unwrap());
+        cx.update(|cx| cx.bind_keys(bindings));
+        let (view, cx) = cx.add_window_view(PendingView::new);
+        let focus = view.update(cx, |view, _| {
+            view.context = "Herdr HerdrLegacy layout = rowan-terminal legacy_profile = local".into();
+            view.focus.clone()
+        });
+        cx.update(|window, cx| window.focus(&focus, cx));
+        cx.simulate_keystrokes("ctrl-alt-up ctrl-shift-t");
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.actions, ["space.prev"]);
+            assert_eq!(view.raw, ["ctrl-shift-t"]);
+        });
+        view.update(cx, |view, cx| {
+            view.context = "Herdr HerdrLegacy layout = rowan-terminal legacy_profile = machine0".into();
+            cx.notify();
+        });
+        cx.run_until_parked();
+        cx.simulate_keystrokes("ctrl-alt-up");
+        view.read_with(cx, |view, _| assert_eq!(view.actions, ["space.prev", "pane.go:up"]));
+        view.update(cx, |view, cx| {
+            view.context = "Herdr HerdrLegacy layout = rowan-terminal legacy_profile = unknown".into();
+            cx.notify();
+        });
+        cx.run_until_parked();
+        cx.simulate_keystrokes("ctrl-alt-up");
+        view.read_with(cx, |view, _| assert_eq!(view.actions, ["space.prev", "pane.go:up"]));
+    }
+
+    #[gpui::test]
+    fn endpoint_mod_bindings_match_the_focused_descendant_only(cx: &mut TestAppContext) {
+        let bindings = super::parse_scoped(r#"{"mod:rowan-navigate":{"down":"space.next"}}"#,
+            Some("HerdrLegacy && legacy_profile == local")).unwrap();
+        cx.update(|cx| cx.bind_keys(bindings));
+        let (view, cx) = cx.add_window_view(PendingView::new);
+        let focus = view.update(cx, |view, _| {
+            view.context = "Herdr HerdrLegacy layout = rowan-terminal legacy_profile = local".into();
+            view.leaf_context = Some("Mod mod = rowan-navigate");
+            view.focus.clone()
+        });
+        cx.update(|window, cx| window.focus(&focus, cx));
+        cx.simulate_keystrokes("down");
+        view.read_with(cx, |view, _| assert_eq!(view.actions, ["space.next"]));
+        view.update(cx, |view, cx| {
+            view.context = "Herdr HerdrLegacy layout = rowan-terminal legacy_profile = machine0".into();
+            cx.notify();
+        });
+        cx.run_until_parked();
+        cx.simulate_keystrokes("down");
+        view.read_with(cx, |view, _| assert_eq!(view.actions, ["space.next"]));
+    }
+
     #[test]
     fn only_byte_identical_shipped_keys_are_upgraded() {
         let dir = std::env::temp_dir().join(format!("herdr-keys-migration-{}", std::process::id()));
