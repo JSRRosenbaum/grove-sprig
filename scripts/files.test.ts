@@ -55,7 +55,6 @@ test("Files keeps remote POSIX directory listings on sh", async () => {
   expect(calls).toEqual(["sh"]);
 });
 
-test("Files lists literal folder names, not shell expressions", async () => {
 test(`${path}: lists literal folder names, not shell expressions`, async () => {
   const root = await mkdtemp(join(process.platform === "linux" ? "/var/tmp" : tmpdir(), "herdr-files-"));
   try {
