@@ -1,6 +1,5 @@
 # Herdr changelog
 
-<<<<<<< HEAD
 ## Sprig upstream integration — 2026-11-06
 
 - Rebased Sprig onto upstream herdr-app `cfcf836` (released 0.1.13 plus reviewed
@@ -10,7 +9,7 @@
   sidebar, durable repository/worktree grouping, prompt-free New worktree and
   remote clipboard paste on the new upstream base.
 - Source pins are recorded in `sprig/upstreams.json`.
-=======
+
 ## [sprig-preview-2026.11.03.2] - 2026-11-03
 
 ### New
@@ -30,7 +29,6 @@
 
 Requires the matching Sprig frontend and customization bundle; the core,
 ConPTY and native annotation/review runtimes are unchanged.
->>>>>>> 2fe333f (feat(sidebar): persist workspace groups in core documents)
 
 ## [sprig-preview-2026.11.03.1] - 2026-11-03
 
