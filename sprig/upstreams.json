@@ -4,10 +4,10 @@
   "canonical_repository": "https://github.com/JSRRosenbaum/grove-sprig",
   "app": {
     "upstream": "https://github.com/herdrdev/herdr-app",
-    "upstream_base": "71d3e8f71663120b09ae82666bd37c9ff582c8da",
+    "upstream_base": "cfcf836404f932817f10f88455c33e33c94fd1df",
     "imported_fork": "https://github.com/JSRRosenbaum/herdr-app",
-    "imported_revision": "7d5db1f9a32507ee70457d345098bc8463417a08",
-    "source_version": "0.1.12",
+    "imported_revision": "cfcf836404f932817f10f88455c33e33c94fd1df",
+    "source_version": "0.1.13",
     "source_directory": "."
   },
   "customizations": {
@@ -47,10 +47,10 @@
     "core": "0.1.17"
   },
   "latest_observed": {
-    "checked_on": "2026-11-02",
-    "app_stable": "0.1.12",
-    "app_stable_revision": "4aa3460749947e7771aa39a8a2cec58d46649926",
-    "app_master_revision": "71d3e8f71663120b09ae82666bd37c9ff582c8da",
+    "checked_on": "2026-11-06",
+    "app_stable": "0.1.13",
+    "app_stable_revision": "93b097f6e29fcb2d90a30dea2f03ce4e5dee7981",
+    "app_master_revision": "cfcf836404f932817f10f88455c33e33c94fd1df",
     "core": "0.1.17",
     "layout_upstream_revision": "e7640bf166257abaecca27c0fcf8a3190b315cfc",
     "adopted": true
