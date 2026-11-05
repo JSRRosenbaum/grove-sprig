@@ -244,6 +244,28 @@ mod tests {
         drop(second);
         fs::write(home.join("view.json"), "first").unwrap();
         let reused = claim_at(&home).unwrap();
+        if reused.id != 2 {
+            let lock_state = match lock_file(&home.join("instances").join("2.lock")) {
+                Ok(f) => match f.try_lock() {
+                    Ok(()) => "free".to_string(),
+                    Err(e) => format!("locked:{e:?}"),
+                },
+                Err(e) => format!("open:{e:?}"),
+            };
+            let sock = socket_at(&home, 2);
+            let sock_state = match UnixStream::connect(&sock) {
+                Ok(_) => "connect-ok".to_string(),
+                Err(e) => format!("{:?}", e.kind()),
+            };
+            let meta = fs::symlink_metadata(&sock).map(|m| format!("{:?}", m.file_type())).unwrap_or("absent".to_string());
+            panic!(
+                "slot 2 probe: lock={lock_state} socket={sock_state} type={meta} \
+                 dir={:?} tmpdir={:?} slots={:?}",
+                fs::read_dir(home.join("instances")).map(|r| r.filter_map(|e| e.ok().map(|e| e.file_name())).collect::<Vec<_>>()),
+                std::env::temp_dir(),
+                candidate_ids().ok(),
+            );
+        }
         assert_eq!(reused.id, 2);
         assert_eq!(fs::read_to_string(state_at(&home, 2).join("view.json")).unwrap(), "second");
         assert_eq!(fs::read_to_string(state_at(&home, 1).join("view.json")).unwrap(), "first");

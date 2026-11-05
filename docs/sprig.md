@@ -2,6 +2,55 @@
 
 Canonical source: https://github.com/JSRRosenbaum/grove-sprig (`main`).
 
+## Upstream rebase — 2026-11-06
+
+The app source now sits on the upstream head `herdrdev/herdr-app`
+`cfcf836404f932817f10f88455c33e33c94fd1df` (0.1.13). `sprig/upstreams.json`
+records every pinned revision. The Sprig layer on top of that base is 376
+files: 330 added, 317 of them under `sprig/`, which is the
+`herdr-square-dracula` layout at `e7640bf166257abaecca27c0fcf8a3190b315cfc`
+imported untouched — 0 files of it modified, 0 deleted — plus our own mods,
+layouts, themes, keys, installer and tests; and 46 upstream-owned files that
+carry Sprig deltas.
+
+Replaying only the post-merge commits dropped the deltas the merge commit
+itself carried, which a cherry-pick cannot recover: the per-window instance
+lease and its isolated state directory (`src/instances.rs`, 23 call sites),
+the shipped layout, theme, key and mod bundle, the gpui patch that exposes
+`clear_pending_keystrokes`, and the `layout.sync` state-home parameter. The
+rebase therefore restores every customization file the rebased tree lacked
+and re-applies the deltas to upstream-owned files through a 3-way merge whose
+base is upstream at the merge and whose other side is the customization
+branch tip (`7a6e344`).
+
+The drift that merge exposed, fixed in the same commit: the terminal view has
+one `key_down` that keeps upstream's find-field guards ahead of Sprig's
+copy-mode and copy-shortcut handling; `Binding` serializes so legacy key
+profiles can be re-scoped; three Sprig commands pass the app context
+`focused_terminal` now requires. Later commits pin `sprig/upstreams.json` to
+the new app base (`4eb39bb`), follow the rebased terminal, model and overlay
+signatures in the test targets (`852db6f`), and give the Sprig Files mod the
+remote Windows listing upstream added to the shipped one (`a4fb4ef`), which
+the parameterized Files test asserts of both file mods.
+
+The rebase changes no paired runtime: `herdr-core` stays at
+`421c5ab41857f8b4a5f155c42f763008f455b33d` (0.1.17) with its two Sprig
+legacy-clear patches, and the renderer at ghostty
+`291fd050b9e9c293c8adb6a140742649b7e42d3a`. No core upgrade is required to
+run this tree.
+
+Validation on this tree: `cargo build --locked` clean; `cargo test --locked`
+394 tests pass (364 app, 26 integration, 4 across three smaller targets), 2
+ignored HC-session fixtures that need a running core; `just test`'s other gates
+47 Python installer/consumer tests, 62 Node mod-consumer tests, 47 Bun script
+tests; `just docs-check` 4 tests plus reference checks over 6 pages.
+`python3 sprig/install.py` installs 70 files into a private root with personal
+settings preserved. In an isolated native instance, `layout.switch` to the
+shipped `rowan-terminal` layout loads the Sprig bundle — the 14 `rowan-*` and
+`legacy.*` commands register, `terminal.copy_mode` and `terminal.scroll`
+execute, and a background `space.new` creates a workspace from the repository
+without stealing the window's view.
+
 ## Durable workspace grouping — 2026-11-03
 
 Sprig now persists repository membership in a separate `sprig-sidebar` document

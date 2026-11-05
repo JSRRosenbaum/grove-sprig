@@ -16,6 +16,11 @@
   sidebar, durable repository/worktree grouping, prompt-free New worktree and
   remote clipboard paste on the new upstream base.
 - Source pins are recorded in `sprig/upstreams.json`.
+- The Sprig file mod lists folders on the machine that owns them, as the shipped
+  mod does: it targets that machine and falls back to its PowerShell when the
+  machine has no `sh`, instead of raising.
+- Third-party notices regenerated for the 0.1.13 dependency graph, which needs
+  `cargo-about 0.9.3` built with its `cli` feature.
 
 ## [sprig-preview-2026.11.03.2] - 2026-11-03
 
