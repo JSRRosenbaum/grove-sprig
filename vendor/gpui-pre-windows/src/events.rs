@@ -99,8 +99,10 @@ impl WindowsWindowInner {
             WM_MOVE => self.handle_move_msg(handle, lparam),
             WM_SIZE => self.handle_size_msg(wparam, lparam),
             WM_GETMINMAXINFO => self.handle_get_min_max_info_msg(lparam),
-            WM_ENTERSIZEMOVE | WM_ENTERMENULOOP => self.handle_size_move_loop(handle),
-            WM_EXITSIZEMOVE | WM_EXITMENULOOP => self.handle_size_move_loop_exit(handle),
+            WM_ENTERSIZEMOVE => self.handle_size_move_loop(handle, true),
+            WM_ENTERMENULOOP => self.handle_size_move_loop(handle, false),
+            WM_EXITSIZEMOVE => self.handle_size_move_loop_exit(handle, true),
+            WM_EXITMENULOOP => self.handle_size_move_loop_exit(handle, false),
             WM_TIMER => self.handle_timer_msg(handle, wparam),
             WM_NCCALCSIZE => self.handle_calc_client_size(handle, wparam, lparam),
             WM_DPICHANGED => self.handle_dpi_changed_msg(handle, wparam, lparam),
@@ -292,37 +294,61 @@ impl WindowsWindowInner {
         }
     }
 
-    fn handle_size_move_loop(&self, handle: HWND) -> Option<isize> {
-        unsafe {
-            let ret = SetTimer(
-                Some(handle),
-                SIZE_MOVE_LOOP_TIMER_ID,
-                USER_TIMER_MINIMUM,
-                None,
-            );
+    fn handle_size_move_loop(&self, handle: HWND, size_move: bool) -> Option<isize> {
+        if self.size_move_depth.get() == 0 && self.menu_loop_depth.get() == 0 {
+            let ret = unsafe {
+                SetTimer(
+                    Some(handle),
+                    SIZE_MOVE_LOOP_TIMER_ID,
+                    USER_TIMER_MINIMUM,
+                    None,
+                )
+            };
             if ret == 0 {
+                // Keep normal wakes enabled if there is no timer to take over.
                 log::error!(
                     "unable to create timer: {}",
                     std::io::Error::last_os_error()
                 );
+                return None;
             }
+        }
+        if size_move {
+            self.size_move_depth.set(self.size_move_depth.get() + 1);
+            self.dispatcher.enter_size_move();
+        } else {
+            self.menu_loop_depth.set(self.menu_loop_depth.get() + 1);
         }
         None
     }
 
-    fn handle_size_move_loop_exit(&self, handle: HWND) -> Option<isize> {
-        unsafe {
-            KillTimer(Some(handle), SIZE_MOVE_LOOP_TIMER_ID).log_err();
+    fn handle_size_move_loop_exit(&self, handle: HWND, size_move: bool) -> Option<isize> {
+        let depth = if size_move {
+            &self.size_move_depth
+        } else {
+            &self.menu_loop_depth
+        };
+        if depth.get() == 0 {
+            return None;
+        }
+        depth.set(depth.get() - 1);
+        if self.size_move_depth.get() == 0 && self.menu_loop_depth.get() == 0 {
+            unsafe {
+                KillTimer(Some(handle), SIZE_MOVE_LOOP_TIMER_ID).log_err();
+            }
+        }
+        if size_move {
+            self.dispatcher.exit_size_move();
         }
         None
     }
 
     fn handle_timer_msg(&self, handle: HWND, wparam: WPARAM) -> Option<isize> {
         if wparam.0 == SIZE_MOVE_LOOP_TIMER_ID {
-            let mut runnables = self.main_receiver.clone().try_iter();
-            while let Some(Ok(runnable)) = runnables.next() {
-                WindowsDispatcher::execute_runnable(runnable);
-            }
+            self.dispatcher.run_modal_timer_tasks(
+                &self.main_receiver,
+                WindowsDispatcher::execute_runnable,
+            );
             self.handle_paint_msg(handle)
         } else {
             None
@@ -341,6 +367,16 @@ impl WindowsWindowInner {
     }
 
     fn handle_destroy_msg(&self, handle: HWND) -> Option<isize> {
+        let size_move_depth = self.size_move_depth.replace(0);
+        let menu_loop_depth = self.menu_loop_depth.replace(0);
+        if size_move_depth != 0 || menu_loop_depth != 0 {
+            unsafe {
+                KillTimer(Some(handle), SIZE_MOVE_LOOP_TIMER_ID).log_err();
+            }
+        }
+        for _ in 0..size_move_depth {
+            self.dispatcher.exit_size_move();
+        }
         let callback = { self.state.callbacks.close.take() };
         // Re-enable parent window if this was a modal dialog
         if let Some(parent_hwnd) = self.parent_hwnd {

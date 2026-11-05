@@ -1,9 +1,9 @@
 use std::{
     ffi::c_void,
     ptr::NonNull,
-    sync::atomic::{AtomicBool, Ordering},
+    sync::atomic::{AtomicUsize, Ordering},
     thread::{ThreadId, current},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use anyhow::Context;
@@ -22,11 +22,18 @@ use windows::Win32::{
 
 use crate::{HWND, SafeHwnd, WM_GPUI_TASK_DISPATCHED_ON_MAIN_THREAD};
 use gpui::{
-    PlatformDispatcher, Priority, PriorityQueueSender, RunnableVariant, TimerResolutionGuard,
+    PlatformDispatcher, Priority, PriorityQueueReceiver, PriorityQueueSender, RunnableVariant,
+    TimerResolutionGuard,
 };
 
+pub(crate) const MAIN_TASK_BUDGET: Duration = Duration::from_millis(10);
+const WAKE_POSTED: usize = 1;
+const SIZE_MOVE_LOOP: usize = 2;
+
 pub(crate) struct WindowsDispatcher {
-    pub(crate) wake_posted: AtomicBool,
+    // The low bit tracks a posted or active wake; the remaining bits count
+    // nested native move/size loops on this dispatcher's UI thread.
+    wake_state: AtomicUsize,
     main_sender: PriorityQueueSender<RunnableVariant>,
     main_thread_id: ThreadId,
     pub(crate) platform_window_handle: SafeHwnd,
@@ -47,7 +54,75 @@ impl WindowsDispatcher {
             main_thread_id,
             platform_window_handle,
             validation_number,
-            wake_posted: AtomicBool::new(false),
+            wake_state: AtomicUsize::new(0),
+        }
+    }
+
+    pub(crate) fn enter_size_move(&self) {
+        self.wake_state.fetch_add(SIZE_MOVE_LOOP, Ordering::SeqCst);
+    }
+
+    pub(crate) fn exit_size_move(&self) {
+        let previous = self.wake_state.fetch_sub(SIZE_MOVE_LOOP, Ordering::SeqCst);
+        debug_assert!(previous >= SIZE_MOVE_LOOP);
+        if previous < 2 * SIZE_MOVE_LOOP {
+            // A producer may have claimed the old wake and not posted it yet.
+            // Post independently on final exit rather than waiting for it.
+            self.mark_wake_active();
+            self.post_foreground_wake();
+        }
+    }
+
+    pub(crate) fn in_size_move(&self) -> bool {
+        self.wake_state.load(Ordering::SeqCst) >= SIZE_MOVE_LOOP
+    }
+
+    pub(crate) fn clear_wake(&self) {
+        self.wake_state.fetch_and(!WAKE_POSTED, Ordering::SeqCst);
+    }
+
+    pub(crate) fn mark_wake_active(&self) {
+        self.wake_state.fetch_or(WAKE_POSTED, Ordering::SeqCst);
+    }
+
+    pub(crate) fn wake_foreground(&self) {
+        // Claim the wake only if no move/size loop and no wake are active.
+        // The single atomic state closes the enqueue-versus-final-exit race.
+        if self
+            .wake_state
+            .compare_exchange(0, WAKE_POSTED, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+        {
+            self.post_foreground_wake();
+        }
+    }
+
+    fn post_foreground_wake(&self) {
+        if let Err(error) = unsafe {
+            PostMessageW(
+                Some(self.platform_window_handle.as_raw()),
+                WM_GPUI_TASK_DISPATCHED_ON_MAIN_THREAD,
+                WPARAM(self.validation_number),
+                LPARAM(0),
+            )
+        } {
+            self.clear_wake();
+            log::error!("unable to post foreground task wake: {error}");
+        }
+    }
+
+    pub(crate) fn run_modal_timer_tasks(
+        &self,
+        receiver: &PriorityQueueReceiver<RunnableVariant>,
+        mut execute: impl FnMut(RunnableVariant),
+    ) {
+        let start = Instant::now();
+        let mut runnables = receiver.clone().try_iter();
+        while let Some(Ok(runnable)) = runnables.next() {
+            execute(runnable);
+            if self.in_size_move() && start.elapsed() >= MAIN_TASK_BUDGET {
+                break;
+            }
         }
     }
 
@@ -117,19 +192,7 @@ impl PlatformDispatcher for WindowsDispatcher {
 
     fn dispatch_on_main_thread(&self, runnable: RunnableVariant, priority: Priority) {
         match self.main_sender.send(priority, runnable) {
-            Ok(_) => {
-                if !self.wake_posted.swap(true, Ordering::AcqRel) {
-                    unsafe {
-                        PostMessageW(
-                            Some(self.platform_window_handle.as_raw()),
-                            WM_GPUI_TASK_DISPATCHED_ON_MAIN_THREAD,
-                            WPARAM(self.validation_number),
-                            LPARAM(0),
-                        )
-                        .log_err();
-                    }
-                }
-            }
+            Ok(_) => self.wake_foreground(),
             Err(runnable) => {
                 // NOTE: Runnable may wrap a Future that is !Send.
                 //

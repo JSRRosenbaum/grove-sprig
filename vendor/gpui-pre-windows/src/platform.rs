@@ -310,6 +310,7 @@ impl WindowsPlatform {
             drop_target_helper: self.drop_target_helper.clone().unwrap(),
             validation_number: self.inner.validation_number,
             main_receiver: self.inner.main_receiver.clone(),
+            dispatcher: self.inner.dispatcher.clone(),
             platform_window_handle: self.handle,
             disable_direct_composition: self.disable_direct_composition,
             directx_devices: self.inner.state.directx_devices.borrow().clone().unwrap(),
@@ -1246,12 +1247,16 @@ impl WindowsPlatformInner {
 
     #[inline]
     fn run_foreground_task(&self) -> Option<isize> {
-        const MAIN_TASK_TIMEOUT: u128 = 10;
-
         let start = std::time::Instant::now();
         'tasks: loop {
             'timeout_loop: loop {
-                if start.elapsed().as_millis() >= MAIN_TASK_TIMEOUT {
+                if self.dispatcher.in_size_move() {
+                    // A wake posted before entry may still arrive in the
+                    // native loop. The timer owns the queue until final exit.
+                    self.dispatcher.clear_wake();
+                    break 'tasks;
+                }
+                if start.elapsed() >= MAIN_TASK_BUDGET {
                     log::debug!("foreground task timeout reached");
                     // we spent our budget on gpui tasks, we likely have a lot of work queued so drain system events first to stay responsive
                     // then quit out of foreground work to allow us to process other gpui events first before returning back to foreground task work
@@ -1274,17 +1279,9 @@ impl WindowsPlatformInner {
                     while peek_msg(&mut msg, PM_QS_INPUT) {
                         process_message(&msg);
                     }
-                    // Allow the main loop to process other gpui events before going back into `run_foreground_task`
-                    unsafe {
-                        if let Err(_) = PostMessageW(
-                            Some(self.dispatcher.platform_window_handle.as_raw()),
-                            WM_GPUI_TASK_DISPATCHED_ON_MAIN_THREAD,
-                            WPARAM(self.validation_number),
-                            LPARAM(0),
-                        ) {
-                            self.dispatcher.wake_posted.store(false, Ordering::Release);
-                        };
-                    }
+                    // Re-arm only outside a native move/size loop.
+                    self.dispatcher.clear_wake();
+                    self.dispatcher.wake_foreground();
                     break 'tasks;
                 }
                 let mut main_receiver = self.main_receiver.clone();
@@ -1296,11 +1293,11 @@ impl WindowsPlatformInner {
 
             // Someone could enqueue a Runnable here. The flag is still true, so they will not PostMessage.
             // We need to check for those Runnables after we clear the flag.
-            self.dispatcher.wake_posted.store(false, Ordering::Release);
+            self.dispatcher.clear_wake();
             let mut main_receiver = self.main_receiver.clone();
             match main_receiver.try_pop() {
                 Ok(Some(runnable)) => {
-                    self.dispatcher.wake_posted.store(true, Ordering::Release);
+                    self.dispatcher.mark_wake_active();
 
                     WindowsDispatcher::execute_runnable(runnable);
                 }
@@ -1391,6 +1388,7 @@ pub(crate) struct WindowCreationInfo {
     pub(crate) drop_target_helper: IDropTargetHelper,
     pub(crate) validation_number: usize,
     pub(crate) main_receiver: PriorityQueueReceiver<RunnableVariant>,
+    pub(crate) dispatcher: Arc<WindowsDispatcher>,
     pub(crate) platform_window_handle: HWND,
     pub(crate) disable_direct_composition: bool,
     pub(crate) directx_devices: DirectXDevices,
@@ -1937,5 +1935,184 @@ mod tests {
                 vec![12],
             )),
         );
+    }
+}
+
+#[cfg(test)]
+mod modal_scheduler_tests {
+    use super::WindowsPlatform;
+    use crate::{MAIN_TASK_BUDGET, WM_GPUI_TASK_DISPATCHED_ON_MAIN_THREAD, WindowsDispatcher};
+    use std::{
+        future::poll_fn,
+        sync::{
+            Arc, Barrier, Mutex,
+            atomic::{AtomicBool, AtomicUsize, Ordering},
+        },
+        task::{Poll, Waker},
+        time::Duration,
+    };
+    use windows::Win32::UI::WindowsAndMessaging::{
+        DispatchMessageW, MSG, PM_REMOVE, PeekMessageW,
+    };
+
+    fn dispatch_wakes(platform: &WindowsPlatform) -> usize {
+        let mut count = 0;
+        let mut message = MSG::default();
+        while unsafe {
+            PeekMessageW(
+                &mut message,
+                Some(platform.handle),
+                WM_GPUI_TASK_DISPATCHED_ON_MAIN_THREAD,
+                WM_GPUI_TASK_DISPATCHED_ON_MAIN_THREAD,
+                PM_REMOVE,
+            )
+        }
+        .as_bool()
+        {
+            count += 1;
+            unsafe { DispatchMessageW(&message) };
+        }
+        count
+    }
+
+    fn register_waker(platform: &WindowsPlatform) -> (Waker, Arc<AtomicUsize>) {
+        let slot = Arc::new(Mutex::new(None));
+        let polls = Arc::new(AtomicUsize::new(0));
+        let future_slot = slot.clone();
+        let future_polls = polls.clone();
+        platform
+            .foreground_executor
+            .spawn(poll_fn(move |cx| {
+                if future_polls.fetch_add(1, Ordering::SeqCst) == 0 {
+                    *future_slot.lock().unwrap() = Some(cx.waker().clone());
+                    Poll::Pending
+                } else {
+                    Poll::Ready(())
+                }
+            }))
+            .detach();
+        assert!(dispatch_wakes(platform) >= 1);
+        let waker = slot.lock().unwrap().take().unwrap();
+        (waker, polls)
+    }
+
+    #[test]
+    fn modal_scheduler_parks_existing_and_cross_thread_work_until_exit() {
+        let platform = WindowsPlatform::new(true).unwrap();
+        let (waker, polls) = register_waker(&platform);
+        let completed = Arc::new(AtomicUsize::new(0));
+        let task_completed = completed.clone();
+        platform
+            .foreground_executor
+            .spawn(async move {
+                task_completed.fetch_add(1, Ordering::SeqCst);
+            })
+            .detach();
+
+        platform.inner.dispatcher.enter_size_move();
+        assert!(dispatch_wakes(&platform) >= 1);
+        assert_eq!(completed.load(Ordering::SeqCst), 0);
+        std::thread::spawn(move || waker.wake()).join().unwrap();
+        assert_eq!(dispatch_wakes(&platform), 0);
+        assert_eq!(polls.load(Ordering::SeqCst), 1);
+
+        platform.inner.dispatcher.exit_size_move();
+        assert!(dispatch_wakes(&platform) >= 1);
+        assert_eq!(completed.load(Ordering::SeqCst), 1);
+        assert_eq!(polls.load(Ordering::SeqCst), 2);
+        assert!(platform.inner.main_receiver.is_empty());
+    }
+
+    #[test]
+    fn modal_scheduler_budget_yields_with_self_rescheduled_work_pending() {
+        let platform = WindowsPlatform::new(true).unwrap();
+        let polls = Arc::new(AtomicUsize::new(0));
+        let stop = Arc::new(AtomicBool::new(false));
+        let future_polls = polls.clone();
+        let future_stop = stop.clone();
+        platform.inner.dispatcher.enter_size_move();
+        platform
+            .foreground_executor
+            .spawn(poll_fn(move |cx| {
+                let previous = future_polls.fetch_add(1, Ordering::SeqCst);
+                if future_stop.load(Ordering::SeqCst) {
+                    Poll::Ready(())
+                } else {
+                    cx.waker().wake_by_ref();
+                    if previous == 0 {
+                        std::thread::sleep(MAIN_TASK_BUDGET + Duration::from_millis(1));
+                    }
+                    Poll::Pending
+                }
+            }))
+            .detach();
+        platform.inner.dispatcher.run_modal_timer_tasks(
+            &platform.inner.main_receiver,
+            WindowsDispatcher::execute_runnable,
+        );
+        assert_eq!(polls.load(Ordering::SeqCst), 1);
+        assert!(!platform.inner.main_receiver.is_empty());
+        assert_eq!(dispatch_wakes(&platform), 0);
+
+        stop.store(true, Ordering::SeqCst);
+        platform.inner.dispatcher.exit_size_move();
+        assert!(dispatch_wakes(&platform) >= 1);
+        assert_eq!(polls.load(Ordering::SeqCst), 2);
+        assert!(platform.inner.main_receiver.is_empty());
+    }
+
+    #[test]
+    fn modal_scheduler_nesting_does_not_park_another_dispatcher() {
+        let first = WindowsPlatform::new(true).unwrap();
+        let second = WindowsPlatform::new(true).unwrap();
+        let first_done = Arc::new(AtomicUsize::new(0));
+        let second_done = Arc::new(AtomicUsize::new(0));
+        first.inner.dispatcher.enter_size_move();
+        first.inner.dispatcher.enter_size_move();
+        let done = first_done.clone();
+        first
+            .foreground_executor
+            .spawn(async move {
+                done.fetch_add(1, Ordering::SeqCst);
+            })
+            .detach();
+        let done = second_done.clone();
+        second
+            .foreground_executor
+            .spawn(async move {
+                done.fetch_add(1, Ordering::SeqCst);
+            })
+            .detach();
+
+        assert!(dispatch_wakes(&second) >= 1);
+        assert_eq!(second_done.load(Ordering::SeqCst), 1);
+        assert_eq!(dispatch_wakes(&first), 0);
+        first.inner.dispatcher.exit_size_move();
+        assert_eq!(dispatch_wakes(&first), 0);
+        assert_eq!(first_done.load(Ordering::SeqCst), 0);
+        first.inner.dispatcher.exit_size_move();
+        assert!(dispatch_wakes(&first) >= 1);
+        assert_eq!(first_done.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn modal_scheduler_cross_thread_wake_racing_final_exit_is_not_lost() {
+        let platform = WindowsPlatform::new(true).unwrap();
+        for _ in 0..32 {
+            let (waker, polls) = register_waker(&platform);
+            platform.inner.dispatcher.enter_size_move();
+            let barrier = Arc::new(Barrier::new(2));
+            let worker_barrier = barrier.clone();
+            let worker = std::thread::spawn(move || {
+                worker_barrier.wait();
+                waker.wake();
+            });
+            barrier.wait();
+            platform.inner.dispatcher.exit_size_move();
+            worker.join().unwrap();
+            assert!(dispatch_wakes(&platform) >= 1);
+            assert_eq!(polls.load(Ordering::SeqCst), 2);
+            assert!(platform.inner.main_receiver.is_empty());
+        }
     }
 }
