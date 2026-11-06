@@ -86,10 +86,6 @@
     "ctrl-x l": "mod.open:picker",
     "ctrl-x j": "app.palette"
   },
-  "layout:square-dracula": {
-    "ctrl-shift-k": "square-dracula-workspace-chrome.picker",
-    "ctrl-x l": "square-dracula-workspace-chrome.picker"
-  },
   "terminal": {
     "ctrl-backspace": "send:\u0017",
     "ctrl-left": "send:\u001bb",

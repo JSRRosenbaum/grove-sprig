@@ -2,6 +2,44 @@
 
 Canonical source: https://github.com/JSRRosenbaum/grove-sprig (`main`).
 
+## Front-end in the binary — 2026-11-06
+
+The Sprig front-end stopped being a payload. The 19 mods that were under
+`sprig/mods` (7 `rowan-*`, 12 `square-dracula-*`), `sprig/layouts/` and
+`sprig/themes/` are folded into the app's own defaults and embedded in the
+binary: mods in `defaults/mods`, the `rowan-terminal` layout in
+`defaults/layouts` registered in `LAYOUTS` (`src/window.rs`), the appearance in
+`defaults/themes` registered in `THEMES` (`src/settings.rs`). The app writes the
+defaults it owns into the app home on every start, so a release is one artifact,
+a new machine needs no front-end step, and a customization is an edit to the
+shipped file instead of a clone under a new name.
+
+Folding onto the mods Herdr ships — rather than carrying clones of the 0.1.7
+ones — returns the upstream behavior the clones lacked: the Changes panel's
+commit workflow, per-folder saved navigation in Files, the sidebar following
+panel width, and worktree dialog timeouts. `src/window.rs` gained
+`DEFAULT_LAYOUT`: a window whose core session has chosen no layout opens on
+`rowan-terminal`, while `app.reset` and a layout whose mods are gone still open
+`main`, the plain Herdr screen.
+
+`sprig/install.py` no longer installs mods, layouts or themes. Its manifest
+validation accepts the front-end shapes earlier installers owned and treats them
+as removals (`owned_for_removal`), so an existing app home converges: retired
+`mods/…`, `layouts/rowan-terminal.json` and `themes/rowan-terminal.json` are
+deleted, while personal mods, personal layouts, settings and keys are left
+alone. `sprig/RECIPE.md`, the upstream gallery recipe for the clone bundle,
+goes with the clones; attribution stays in `NOTICE` and `upstreams.json`.
+
+Validation on this tree: `cargo build --locked` clean; `cargo test --locked` 394
+tests pass (364 app, 26 integration, 4 across three smaller targets), 2 ignored;
+48 Python installer tests; 59 Node mod-consumer tests, with the worktree
+consumer test restored beside the canonical mod; 41 Bun script tests over files,
+picker, palette, agents, spaces and worktree. A fresh app home on a private
+headless display converged from the binary alone — 27 mods, the 4 shipped
+layouts and 3 themes written on launch, no payload step — opened on
+`rowan-terminal`, and rendered the herd sidebar, numbered tabs, pane header and
+the Changes panel with its commit box, with no reported errors.
+
 ## Upstream rebase — 2026-11-06
 
 The app source now sits on the upstream head `herdrdev/herdr-app`

@@ -27,9 +27,6 @@ class InstallerTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.source = self.root / 'source'
-        shutil.copytree(SOURCE / 'mods', self.source / 'mods')
-        shutil.copytree(SOURCE / 'layouts', self.source / 'layouts')
-        shutil.copytree(SOURCE / 'themes', self.source / 'themes')
         shutil.copytree(SOURCE / 'extensions', self.source / 'extensions')
         shutil.copy2(SOURCE / 'rowan-keys.json', self.source / 'rowan-keys.json')
         shutil.copy2(SOURCE / 'legacy_plugins.py', self.source / 'legacy_plugins.py')
@@ -81,27 +78,25 @@ class InstallerTests(unittest.TestCase):
         self.assertTrue((self.app / 'plugin_runtimes/workthreads/LICENSE').is_file())
         self.assertTrue((self.app / 'plugin_runtimes/workthreads/herdr_workthreads/__main__.py').is_file())
         self.assertTrue(os.access(self.app / 'plugin_runtimes/workthreads/herdr_workthreads_cli.py', os.X_OK))
-        self.assertFalse((self.app / 'mods/square-dracula-agents').exists())
-        self.assertFalse((self.app / 'mods/rowan-agents/consumer.test.cjs').exists())
+        self.assertFalse((self.app / 'mods/rowan-agents').exists())
+        self.assertFalse((self.app / 'layouts').exists())
+        self.assertFalse((self.app / 'themes').exists())
 
     def test_invalid_inputs_do_not_mutate_destinations(self):
         self.put(self.app / 'settings.json', b'unchanged')
         self.put(self.agent / 'extensions/mine.ts', b'unchanged')
-        mod = self.source / 'mods/rowan-agents/mod.json'
-        saved = mod.read_bytes()
         overlay = self.source / 'rowan-keys.json'
         original_overlay = overlay.read_bytes()
-        for target, invalid in ((mod, b'{'), (overlay, b'{'), (overlay, b'{"global": {}}'), (self.app / 'keys.json', b'[]')):
+        for target, invalid in ((overlay, b'{'), (overlay, b'{"global": {}}'), (self.app / 'keys.json', b'[]')):
             with self.subTest(target=target, invalid=invalid):
                 self.put(target, invalid)
                 before = snapshot(self.app), snapshot(self.agent)
                 with self.assertRaises((ValueError, OSError)):
                     self.install()
                 self.assertEqual((snapshot(self.app), snapshot(self.agent)), before)
-                mod.write_bytes(saved)
                 overlay.write_bytes(original_overlay)
                 (self.app / 'keys.json').unlink(missing_ok=True)
-        (self.source / 'mods/rowan-picker/main.js').unlink()
+        (self.source / 'extensions/rowan-omp-display.ts').unlink()
         before = snapshot(self.app), snapshot(self.agent)
         with self.assertRaises(FileNotFoundError):
             self.install()
@@ -141,7 +136,7 @@ class InstallerTests(unittest.TestCase):
     def test_failure_restores_bytes_without_further_allocation(self):
         self.install()
         before = snapshot(self.app), snapshot(self.agent)
-        (self.source / 'mods/rowan-spaces/main.js').write_bytes(b'updated')
+        (self.source / 'legacy_worktrees.py').write_bytes(b'updated')
         real_replace = os.replace
         real_temporary = tempfile.NamedTemporaryFile
         replacements = 0
@@ -176,20 +171,20 @@ class InstallerTests(unittest.TestCase):
     def test_symlink_ancestor_cannot_overwrite_external_files(self):
         outside = self.root / 'outside'
         self.put(outside / 'main.js', b'outside data')
-        (self.app / 'mods').mkdir(parents=True)
-        (self.app / 'mods/rowan-spaces').symlink_to(outside, target_is_directory=True)
+        (self.app / 'plugin_runtimes').mkdir(parents=True)
+        (self.app / 'plugin_runtimes/workthreads').symlink_to(outside, target_is_directory=True)
         before = snapshot(self.app), snapshot(self.agent), snapshot(outside)
         with self.assertRaises(ValueError):
             self.install()
         self.assertEqual((snapshot(self.app), snapshot(self.agent), snapshot(outside)), before)
 
     def test_symlink_ancestor_cannot_delete_stale_external_files(self):
-        asset = self.source / 'mods/rowan-spaces/old.svg'
+        asset = self.source / 'plugin_runtimes/workthreads/herdr_workthreads/old.py'
         asset.write_bytes(b'owned')
         self.install()
         outside = self.root / 'outside'
-        shutil.move(self.app / 'mods/rowan-spaces', outside)
-        (self.app / 'mods/rowan-spaces').symlink_to(outside, target_is_directory=True)
+        shutil.move(self.app / 'plugin_runtimes/workthreads', outside)
+        (self.app / 'plugin_runtimes/workthreads').symlink_to(outside, target_is_directory=True)
         asset.unlink()
         before = snapshot(self.app), snapshot(self.agent), snapshot(outside)
         with self.assertRaises(ValueError):
@@ -207,18 +202,33 @@ class InstallerTests(unittest.TestCase):
         self.assertNotIn('ctrl-1', installed)
 
     def test_update_removes_only_manifest_owned_stale_files(self):
-        asset = self.source / 'mods/rowan-spaces/old.svg'
-        asset.write_bytes(b'old asset')
+        asset = self.source / 'plugin_runtimes/workthreads/herdr_workthreads/old.py'
+        asset.write_bytes(b'old module')
         self.install()
-        self.put(self.app / 'mods/rowan-spaces/user.svg', b'user asset')
-        self.put(self.app / 'mods/square-dracula-tabs/main.js', b'outdated')
+        self.put(self.app / 'plugin_runtimes/workthreads/herdr_workthreads/user.py', b'user module')
+        self.put(self.app / 'mods/rowan-spaces/main.js', b'app owned')
+        self.put(self.app / 'layouts/rowan-terminal.json', b'{"type": "row"}')
         asset.unlink()
         self.install()
-        self.assertFalse((self.app / 'mods/rowan-spaces/old.svg').exists())
-        self.assertEqual((self.app / 'mods/rowan-spaces/user.svg').read_bytes(), b'user asset')
-        self.assertEqual((self.app / 'mods/square-dracula-tabs/main.js').read_bytes(), (self.source / 'mods/square-dracula-tabs/main.js').read_bytes())
+        self.assertFalse((self.app / 'plugin_runtimes/workthreads/herdr_workthreads/old.py').exists())
+        self.assertEqual((self.app / 'plugin_runtimes/workthreads/herdr_workthreads/user.py').read_bytes(), b'user module')
+        self.assertEqual((self.app / 'mods/rowan-spaces/main.js').read_bytes(), b'app owned')
+        self.assertEqual((self.app / 'layouts/rowan-terminal.json').read_bytes(), b'{"type": "row"}')
+
+    def test_retired_frontend_files_are_removed_on_upgrade(self):
+        legacy = {'version': 1, 'agent_home': str(self.agent), 'bindings': {},
+                  'files': [{'root': 'app', 'path': 'mods/rowan-agents/main.js'},
+                            {'root': 'app', 'path': 'layouts/rowan-terminal.json'},
+                            {'root': 'app', 'path': 'themes/rowan-terminal.json'}]}
+        self.put(self.app / 'mods/rowan-agents/main.js', b'installed by the old installer')
+        self.put(self.app / 'layouts/rowan-terminal.json', b'{}')
+        self.put(self.app / 'themes/rowan-terminal.json', b'{}')
+        self.put(self.app / '.rowan-install-manifest.json', json.dumps(legacy).encode())
         self.install()
-        self.assertEqual((self.app / 'mods/rowan-spaces/user.svg').read_bytes(), b'user asset')
+        self.assertFalse((self.app / 'mods/rowan-agents/main.js').exists())
+        self.assertFalse((self.app / 'layouts/rowan-terminal.json').exists())
+        self.assertFalse((self.app / 'themes/rowan-terminal.json').exists())
+        self.assertTrue((self.app / 'keys.json').is_file())
 
     def test_cli_explicit_roots_and_environment_defaults(self):
         app, agent = self.root / 'cli-app', self.root / 'cli-agent'

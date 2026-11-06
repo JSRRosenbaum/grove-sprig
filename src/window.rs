@@ -137,13 +137,20 @@ fn launch_failure(record: &Value, output: &str) -> Option<String> {
     Some(if tail.is_empty() { format!("Exit code {code}") } else { format!("Exit code {code}\n{tail}") })
 }
 
-/// The shipped layouts (defaults/layouts): `main` is Herdr's window (spaces
-/// sidebar, tab bar).
+/// The shipped layouts (defaults/layouts): `rowan-terminal` is Herdr's window
+/// (herd sidebar, agents, tabs, files, changes); `main` is the plain spaces
+/// sidebar with a tab bar.
 const LAYOUTS: &[(&str, &str)] = &[
+    ("rowan-terminal", include_str!("../defaults/layouts/rowan-terminal.json")),
     ("main", include_str!("../defaults/layouts/main.json")),
     ("terminals", include_str!("../defaults/layouts/terminals.json")),
     ("win98", include_str!("../defaults/layouts/win98.json")),
 ];
+
+/// The layout a window opens on when nothing has chosen one: a fresh app home,
+/// a core session with no layout in its shared state. `reset` and a layout
+/// whose mods are gone still go to `main`, which is the plain Herdr screen.
+pub(crate) const DEFAULT_LAYOUT: &str = "rowan-terminal";
 
 /// Pictures shipped layouts name as their `preview`, written beside them.
 const LAYOUT_PREVIEWS: &[(&str, &str)] = &[("win98.svg", include_str!("../defaults/layouts/win98.svg"))];
@@ -165,7 +172,8 @@ fn layout_path(name: &str) -> PathBuf {
     file(&format!("layouts/{name}.json"))
 }
 
-/// Layout names on disk, in order: main first, then the rest alphabetically.
+/// Layout names on disk, in order: rowan-terminal first, then the rest
+/// alphabetically.
 /// A layout whose mods are gone (Zen after the update) isn't offered;
 /// `layout.switch {name}` still reaches it.
 pub(crate) fn layout_names() -> Vec<String> {
@@ -176,7 +184,7 @@ pub(crate) fn layout_names() -> Vec<String> {
         .filter_map(|e| e.file_name().to_str()?.strip_suffix(".json").map(str::to_owned))
         .filter(|n| missing_mods(n).is_empty())
         .collect();
-    names.sort_by_key(|n| (n != "main", n.clone()));
+    names.sort_by_key(|n| (n != "rowan-terminal", n.clone()));
     names
 }
 
@@ -482,8 +490,8 @@ impl AppWindow {
         let mut w = AppWindow {
             core,
             runtime,
-            chrome: default_layout("main"),
-            layout_name: "main".into(),
+            chrome: default_layout("rowan-terminal"),
+            layout_name: "rowan-terminal".into(),
             selected_machine: None,
             agent: None,
             agent_focused: None,
@@ -508,7 +516,7 @@ impl AppWindow {
             hidden_fit: Default::default(),
             drag: None,
             written_layout: String::new(),
-            file_chrome: default_layout("main"),
+            file_chrome: default_layout("rowan-terminal"),
             written_state: String::new(),
             picked_theme: None,
             layout_file_ok: true,
@@ -688,7 +696,7 @@ impl AppWindow {
         // A layout whose mods are gone (Zen, T4, ADE after the update took
         // theirs) starts on Herdr's instead of a wall of "did not load".
         let gone = name.as_deref().map(missing_mods).unwrap_or_default();
-        w.load_layout(if gone.is_empty() { name.as_deref().unwrap_or("main") } else { "main" });
+        w.load_layout(if gone.is_empty() { name.as_deref().unwrap_or(DEFAULT_LAYOUT) } else { "main" });
         w.apply_look(window, cx);
         w.show_layout_notes(window, cx);
         if let (Some(n), false) = (&name, gone.is_empty()) {

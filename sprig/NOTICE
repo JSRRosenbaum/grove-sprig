@@ -1,15 +1,18 @@
 Square Dracula
 
-The layout and custom mods are modified from Herdr 0.1.7:
-https://github.com/herdrdev/herdr-app/tree/v0.1.7
+The Sprig front-end derives from the mods, layout and themes Herdr ships:
+https://github.com/herdrdev/herdr-app (the 0.1.13 base is pinned in
+upstreams.json) and from Kyle Avrett's Square Dracula,
+https://github.com/kyle-avrett/herdr-square-dracula.
 
 Herdr's source is licensed under Apache-2.0; a copy is included in LICENSE.
-The modified JavaScript files carry change notices, and layout/mod JSON files
-retain their cloned_from provenance. Changes include the square-dracula
-namespace, Dracula appearance, square and gapless styling, compact tabs,
-read-only Changes panel, menu framing, and sidebar footer spacing.
+The derived appearance is not carried as a separate layout bundle: the Dracula
+palette, square and gapless styling, compact tabs, read-only Changes panel,
+menu framing, and sidebar footer spacing live in the app's own mods, layout and
+theme, and the JavaScript files carry their change notices.
 
-The optional Rowan terminal layout and rowan-* mods add Tokyo Night terminal
+The Rowan terminal layout `rowan-terminal`, the app's default, and the rowan-*
+mods add Tokyo Night terminal
 appearance, persistent compact herds, profile-scoped repository folding and
 navigation, stable display labels, and an OMP display-only metadata companion.
 These local changes were AI-authored for Joseph Rosenbaum on 2026-10-30 and

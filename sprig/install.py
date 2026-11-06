@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Install or update the Rowan layout without replacing personal configuration."""
+"""Install the legacy Rowan key profile and helper modules without replacing personal configuration.
+
+The front-end (mods, layouts, themes) ships inside the app binary as app-owned
+defaults; this installer only writes the key bindings, the agent-home extension,
+the legacy helper modules and the worktree plugin runtime.
+"""
 import argparse
 import importlib.util
 from datetime import datetime, timezone
@@ -15,18 +20,6 @@ ROOT = Path(__file__).resolve().parent
 _compiler_spec = importlib.util.spec_from_file_location('legacy_keys', ROOT / 'legacy_keys.py')
 legacy_keys = importlib.util.module_from_spec(_compiler_spec)
 _compiler_spec.loader.exec_module(legacy_keys)
-MODS = (
-    'rowan-spaces', 'rowan-agents', 'rowan-empty', 'rowan-picker',
-    'rowan-navigate', 'rowan-goto', 'rowan-help',
-    'square-dracula-tabs', 'square-dracula-pane', 'square-dracula-files',
-    'square-dracula-changes', 'square-dracula-menu', 'square-dracula-new-menu',
-    'square-dracula-worktree',
-)
-REQUIRED_ASSETS = {
-    'square-dracula-pane': ('close.svg', 'split-down.svg', 'split-right.svg', 'unzoom.svg', 'zoom.svg'),
-    'square-dracula-files': ('chevron-down.svg', 'chevron-right.svg', 'file.svg', 'folder.svg'),
-    'square-dracula-changes': ('changes.svg',),
-}
 MANIFEST = '.rowan-install-manifest.json'
 
 
@@ -43,26 +36,6 @@ def json_object(data, description):
 def payload(root):
     """Read and validate the whole payload before touching either destination."""
     files = {}
-    for name in MODS:
-        directory = root / 'mods' / name
-        for required in ('main.js', 'mod.json', *REQUIRED_ASSETS.get(name, ())):
-            if not (directory / required).is_file():
-                raise FileNotFoundError(f'Missing source: {directory / required}')
-        for source in sorted(directory.rglob('*')):
-            if not source.is_file() or any(part in ('tests', '__tests__', '__snapshots__') for part in source.relative_to(directory).parts):
-                continue
-            if (source.name == 'jsconfig.json' or source.name.endswith('.d.ts')
-                    or '.test.' in source.name or '.spec.' in source.name
-                    or source.suffix not in ('.js', '.mjs', '.json', '.svg', '.png')):
-                continue
-            data = source.read_bytes()
-            if source.suffix == '.json':
-                json_object(data, str(source))
-            files[('app', source.relative_to(root).as_posix())] = data
-    for relative in ('layouts/rowan-terminal.json', 'themes/rowan-terminal.json'):
-        data = (root / relative).read_bytes()
-        json_object(data, relative)
-        files[('app', relative)] = data
     extension = root / 'extensions' / 'rowan-omp-display.ts'
     files[('agent', 'extensions/rowan-omp-display.ts')] = extension.read_bytes()
     for helper in ('legacy_plugins.py', 'legacy_worktrees.py', 'legacy_scifi_panel.py', 'legacy_review.py'):
@@ -114,9 +87,7 @@ def owned_path(kind, relative):
     if path.is_absolute() or '..' in path.parts or path.as_posix() != relative:
         raise ValueError('Invalid ownership manifest path')
     if kind == 'app':
-        allowed = (len(path.parts) >= 3 and path.parts[0] == 'mods' and path.parts[1] in MODS
-                   or relative in ('layouts/rowan-terminal.json', 'themes/rowan-terminal.json',
-                                   'legacy_plugins.py', 'legacy_worktrees.py', 'legacy_scifi_panel.py', 'legacy_review.py')
+        allowed = (relative in ('legacy_plugins.py', 'legacy_worktrees.py', 'legacy_scifi_panel.py', 'legacy_review.py')
                    or len(path.parts) >= 3 and path.parts[:2] == ('plugin_runtimes', 'workthreads')
                    and (path.suffix == '.py' or path.name == 'LICENSE'
                         or relative == 'plugin_runtimes/workthreads/skills/herdr-workthreads/SKILL.md'))
@@ -125,6 +96,21 @@ def owned_path(kind, relative):
     if not allowed:
         raise ValueError('Invalid ownership manifest path')
     return path
+
+
+def owned_for_removal(kind, relative):
+    """Manifest entries are validated to be removed, not to be written.
+
+    Earlier installers owned the front-end (mods, layouts, themes); it now ships
+    inside the app binary, so those paths stay removable as stale files while
+    the installer no longer writes them.
+    """
+    if kind == 'app' and isinstance(relative, str):
+        path = Path(relative)
+        if not path.is_absolute() and '..' not in path.parts and path.as_posix() == relative \
+                and len(path.parts) >= 2 and path.parts[0] in ('mods', 'layouts', 'themes'):
+            return path
+    return owned_path(kind, relative)
 
 
 def install(app_home, agent_home, backup_home, legacy_config=None, legacy_machine_configs=(), legacy_key_source='local'):
@@ -178,7 +164,7 @@ def install(app_home, agent_home, backup_home, legacy_config=None, legacy_machin
             if not isinstance(entry, dict) or set(entry) != {'root', 'path'}:
                 raise ValueError('Invalid ownership manifest entry')
             kind, relative = entry['root'], entry['path']
-            owned_path(kind, relative)
+            owned_for_removal(kind, relative)
             if kind != 'agent' or manifest['agent_home'] == str(agent_home):
                 previous.add((kind, relative))
     keys_path = destination_path(app_home, 'keys.json')

@@ -3,7 +3,7 @@ import { readFile, mkdtemp, mkdir, writeFile, rm, symlink } from "node:fs/promis
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-for (const path of ["../defaults/mods/files/main.js", "../sprig/mods/square-dracula-files/main.js"]) {
+for (const path of ["../defaults/mods/files/main.js"]) {
 const source = await readFile(new URL(path, import.meta.url), "utf8");
 const directorySource = source.slice(source.indexOf("async function directory("), source.indexOf("\nexport default class"));
 const loadDirectory = (exec: Function, platform: string) => new Function("exec", "window", `${directorySource}; return directory;`)(exec, () => ({ platform }));

@@ -51,7 +51,7 @@ install-sprig:
 
 test-sprig:
     python3 -m unittest discover -s sprig/tests -p 'test_*.py'
-    node --experimental-vm-modules --test sprig/mods/rowan-agents/consumer.test.cjs sprig/mods/rowan-picker/consumer.test.cjs sprig/mods/rowan-spaces/navigation.test.mjs sprig/mods/rowan-goto/consumer.test.cjs defaults/frame/settings/legacy.test.mjs
+    node --experimental-vm-modules --test defaults/mods/rowan-agents/consumer.test.cjs defaults/mods/rowan-spaces/navigation.test.mjs defaults/mods/rowan-goto/consumer.test.cjs defaults/mods/worktree/consumer.test.cjs defaults/frame/settings/legacy.test.mjs
 
 docs-generate: build
     bun scripts/docs.ts generate

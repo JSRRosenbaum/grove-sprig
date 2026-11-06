@@ -5,10 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFileSync, spawnSync } = require('node:child_process');
 
-const sources = [
-  __dirname + '/main.js',
-  path.resolve(__dirname, '../../../defaults/mods/worktree/main.js'),
-];
+const sources = [__dirname + '/main.js'];
 
 for (const sourcePath of sources) {
   test(`${path.relative(process.cwd(), sourcePath)}: New worktree creates its branch and workspace without input`, async (t) => {

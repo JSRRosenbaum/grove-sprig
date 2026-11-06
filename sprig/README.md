@@ -1,20 +1,25 @@
 # Sprig customization bundle
 
-The compact Rowan terminal interface, based on
-[Kyle Avrett's Square Dracula](https://github.com/kyle-avrett/herdr-square-dracula).
-This directory and the native app are maintained together in
-[JSRRosenbaum/grove-sprig](https://github.com/JSRRosenbaum/grove-sprig).
-No personal machine connections, credentials, or running-session state are included.
-The app at the repository root provides independent windows and the native
-prefix/help patches. Runtime `rowan-*` and `square-dracula-*` names are retained
-for installed-state compatibility; a second fork checkout is no longer needed.
+The compact Rowan terminal interface for Herdr, built on the mods Herdr ships
+and Kyle Avrett's [Square Dracula](https://github.com/kyle-avrett/herdr-square-dracula).
+The front-end — the mods, the `rowan-terminal` layout and its theme — is the
+app's own defaults: it is compiled into the app binary and written into the app
+home when the app starts, so a release is one artifact and a machine never needs
+a front-end payload. `sprig/` keeps what the binary cannot ship: the legacy key
+profile, the OMP display companion installed beside `herdr-core`, the helper
+modules the key profile calls, and the worktree plugin runtime. This directory
+and the native app are maintained together in
+[JSRRosenbaum/grove-sprig](https://github.com/JSRRosenbaum/grove-sprig). It ships
+no personal machine connections, credentials, or running-session state. Runtime
+`rowan-*` names are retained for installed-state compatibility.
 
 ![Square Dracula](preview.png)
 
 ## Requirements
 
-- Herdr and herdr-core installed and working. Built from Herdr 0.1.7's shipped layouts
-  and mods.
+- Herdr and herdr-core installed and working. Built on the mods shipped with
+  Herdr 0.1.13; the app revision is pinned in `sprig/upstreams.json`.
+
 - Python 3.11 or newer for the installer and its TOML configuration reader.
 - Git, used by the Files, Changes, Spaces, and worktree panels.
 - Fira Code for the intended terminal and interface typography. It is not bundled; Herdr uses
@@ -32,6 +37,9 @@ From the **Sprig repository root**:
 python3 sprig/install.py --legacy-config /path/to/original/herdr/config.toml
 herdr-app do layout.switch --name rowan-terminal
 ```
+
+New windows open on `rowan-terminal` on their own: it is the app's shipped
+default. `layout.switch` only moves a window that is already running.
 
 See the [root installation guide](../README.md#install-or-update-sprig-customizations)
 for alternate configuration roots, backups and the update/rollback contract.
@@ -61,10 +69,10 @@ set `SPRIG_ANNOTATE_BIN` to its full path in that machine's environment.
 The runtime does not require a legacy Herdr installation; the existing
 annotation JSONL store remains under the legacy plugin state directory.
 
-The original Square Dracula layout and assets remain in this directory as
-attributed source, but the supported installer installs the compact Rowan layout
-and its explicit dependency set. Original standalone-layout installation
-instructions remain available in the [upstream repository](https://github.com/kyle-avrett/herdr-square-dracula).
+The Square Dracula appearance is no longer a separate bundle: it lives in the
+app's own mods, layout and theme. The upstream layout is attributed in `NOTICE`
+and pinned in `upstreams.json`; its standalone installation instructions remain
+available in the [upstream repository](https://github.com/kyle-avrett/herdr-square-dracula).
 
 ## Controls
 
@@ -87,17 +95,18 @@ internal interfaces remain Herdr's or the program's own UI.
 Pull `grove-sprig/main` with `git pull --ff-only` and rerun
 `python3 sprig/install.py` from the repository root. The ownership manifest
 prevents removal of unrelated files. Existing settings and machine/session state
-are not replaced. Do not run another installer concurrently.
+are not replaced, and the installer never touches the front-end files the app
+owns. Do not run another installer concurrently.
 
 To remove the customization, first switch the selected window to another layout.
-Use `.rowan-install-manifest.json` in your app home to identify the installed
-files; preserve unrelated files and personal keybindings. Backup manifests map
-the replaced files to their saved copies. Terminals and workspaces belong to
-herdr-core, not to this layout.
+Use `.rowan-install-manifest.json` in your app home to identify the files the
+installer owns; preserve unrelated files and personal keybindings. Backup
+manifests map the replaced files to their saved copies. Terminals and workspaces
+belong to herdr-core, not to this layout.
 
 ## What the mods access
 
-These are modified versions of Herdr's shipped mods and run with your user permissions.
+These mods are the app's own and run with your user permissions.
 They inspect live spaces, tabs, agents, folders, and git repositories. The machine dialog
 reads `~/.ssh/config`; adding a machine can connect over SSH through `hc`. Worktree actions
 create or remove checkouts only when explicitly invoked. There are no `fetch()` calls or
@@ -105,22 +114,22 @@ custom HTTP polling loops in these mods.
 
 ## Rowan terminal sidebar
 
-The installed `rowan-terminal` layout ports the compact-herds sidebar behavior from
-Joseph's Herdr TUI fork without changing the terminal renderer or moving any programs.
-It uses `rowan-spaces`, `rowan-agents`, `rowan-empty`, and the herd-scoped `rowan-picker`.
+The `rowan-terminal` layout ports the compact-herds sidebar behavior from
+Joseph's Herdr TUI fork without changing the terminal renderer or moving any
+programs. It uses `rowan-spaces`, `rowan-agents`, `rowan-empty`, and the app's
+herd-scoped `picker`, `files`, `worktree`, `tabs`, `pane` and `menu`.
 
 ```sh
 python3 sprig/install.py --legacy-config /path/to/original/herdr/config.toml
 herdr-app check ~/.config/herdr-app/mods/rowan-spaces
 herdr-app check ~/.config/herdr-app/mods/rowan-agents
 herdr-app check ~/.config/herdr-app/mods/rowan-empty
-herdr-app check ~/.config/herdr-app/mods/rowan-picker
-herdr-app do layout.switch --name rowan-terminal
 ```
 
-The installer updates its owned Square Dracula dependencies, Rowan mods/theme/layout,
-legacy plugin helper, and OMP display companion. The legacy profile replaces the
-Rowan, global, terminal, and Navigate key sections; unrelated key sections,
+The mods live in the app home once the app has started; the commands above check
+them there. The installer updates the key profile, the OMP display companion
+beside `herdr-core`, the legacy helper modules, and the worktree runtime. The
+legacy profile replaces the Rowan, global, terminal, and Navigate key sections;
 settings, zoom, and machine configuration remain unchanged. Existing files,
 including the complete previous `keys.json`, are backed up under
 `~/.local/state/herdr-app/rowan-sidebar-backup-*`; each `manifest.json` maps
@@ -309,7 +318,7 @@ No synthetic input was sent to the person's desktop.
 Behavior checks:
 
 ```sh
-node --experimental-vm-modules --test sprig/mods/rowan-spaces/navigation.test.mjs sprig/mods/rowan-agents/consumer.test.cjs sprig/mods/rowan-picker/consumer.test.cjs
+node --experimental-vm-modules --test defaults/mods/rowan-spaces/navigation.test.mjs defaults/mods/rowan-agents/consumer.test.cjs defaults/mods/worktree/consumer.test.cjs
 ```
 
 Rowan qualification on 2026-10-30: 22 behavior tests passed; all four mods have passed
@@ -328,18 +337,19 @@ To leave the sidebar immediately: switch to a previously installed personal layo
 For the exact prior Rowan appearance and keys, restore the files listed in the first
 installation backup's manifest; keep backup originals until the result is verified.
 
-## Gallery and recipe
+## Gallery
 
-[RECIPE.md](RECIPE.md) describes Square Dracula's interface, implementation, limitations, and acceptance checks.
-The original Square Dracula recipe, screenshot, `layouts/`, and `mods/` are retained
-under `sprig/` for attribution and reference.
-
-[herdr.dev/layouts](https://herdr.dev/layouts/) handles indexing and screenshot moderation;
-a published repository may not appear immediately.
+[herdr.dev/layouts](https://herdr.dev/layouts/) indexes layouts and moderates
+screenshots. [The upstream Square Dracula repository](https://github.com/kyle-avrett/herdr-square-dracula)
+keeps the gallery recipe, screenshot, `layouts/` and `mods/` for the layout
+Sprig's appearance derives from. Sprig itself is not a gallery entry: it is a
+frontend whose default layout is `rowan-terminal`.
 
 ## Attribution
 
-The layout and mods are modified from [Herdr 0.1.7](https://github.com/herdrdev/herdr-app),
-under the [Apache-2.0 license](LICENSE). [NOTICE](NOTICE) records the changes and the Lucide
-and Feather icon licenses. Program icons and the Herdr brand image are supplied by your
-Herdr installation, not copied into this repository.
+The appearance derives from the mods [Herdr](https://github.com/herdrdev/herdr-app)
+ships and from [Square Dracula](https://github.com/kyle-avrett/herdr-square-dracula),
+under the [Apache-2.0 license](LICENSE). [NOTICE](NOTICE) records the changes and
+the Lucide and Feather icon licenses, and `upstreams.json` pins every imported
+revision. Program icons and the Herdr brand image are supplied by your Herdr
+installation, not copied into this repository.

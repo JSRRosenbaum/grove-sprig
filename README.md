@@ -162,10 +162,6 @@ runtime IDs are not a second installation.
 
 Ctrl+Shift+P shows every command and its key (Cmd+Shift+P on macOS). Change any key in `keys.json`; see [the keys section](defaults/AGENTS.md#keys-keysjson) of the mod guide for the format, including JSON objects for named, typed command arguments.
 
-The app's executable and installed state still use `herdr-app`, `rowan-terminal`
-and `rowan-*` names for compatibility. The project name is Sprig; those stable
-runtime IDs are not a second installation.
-
 Mods have command and network access; they are **not sandboxed extensions**.
 Review third-party code before installing it. Telemetry can be disabled in
 Settings → Privacy. See [security and privacy](docs/security.md).

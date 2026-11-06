@@ -4,9 +4,16 @@ Sprig is Grove's unofficial Herdr interface fork. Use
 [JSRRosenbaum/grove-sprig](https://github.com/JSRRosenbaum/grove-sprig) for issues
 and pull requests against `main`; the retired app/layout forks are history only.
 
-Prefer changes in `sprig/mods` and `sprig/layouts` when the existing API can express
-the behavior. Native app source remains at the root. Preserve runtime IDs and
-existing user configuration unless an explicit migration is included.
+The front-end is the app's own defaults: mods in `defaults/mods`, layouts in
+`defaults/layouts` (registered in `LAYOUTS`, `src/window.rs`), themes in
+`defaults/themes` (registered in `THEMES`, `src/settings.rs`). All three are
+embedded at build time and written into the app home on launch, so a release is
+one artifact. The app rewrites the defaults it owns on every start, so a
+customization is an edit to the shipped file, never a clone under a new name.
+`sprig/` keeps what the app cannot ship: the legacy key profile, the helper
+modules and the plugin runtimes that `sprig/install.py` installs.
+Preserve runtime IDs and existing user configuration unless an explicit
+migration is included.
 Use machine/group, workspace name, and the visible `w…` sidebar tag when
 describing live work to users; hidden core IDs are implementation details.
 

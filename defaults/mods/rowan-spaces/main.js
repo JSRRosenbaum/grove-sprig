@@ -174,7 +174,7 @@ export default class Spaces extends View {
       if (!current || !machines().some(m => m.name === current.machine && m.layout === "ready")) return;
       const action = worktree[1];
       const folder = (focused()?.space === current.id && focused()?.cwd) || place(current, panes());
-      openOverlay({mod: "square-dracula-worktree", kind: "dialog", frame: "none",
+      openOverlay({mod: "worktree", kind: "dialog", frame: "none",
         ...(action === "open" ? {width: 560, height: 480} : {width: 460, height: 280}),
         props: {space: current.id, machine: current.machine, folder, action}});
       return;
@@ -703,7 +703,7 @@ export default class Spaces extends View {
   }
 
 
-  menu(w) { openOverlay({mod: "square-dracula-menu", kind: "popup", frame: "none", width: 200, height: 260, props: {tab: "space", target: {id: w.id}}}); }
+  menu(w) { openOverlay({mod: "menu", kind: "popup", frame: "none", width: 200, height: 260, props: {tab: "space", target: {id: w.id}}}); }
   ordered() {
     const sp = spaces(), ps = panes();
     for (const w of sp) if (!this.shown.has(w.id) && (where(w, ps) in this.git || Date.now() - (this.born[w.id] ??= Date.now()) > 1500)) this.shown.add(w.id);

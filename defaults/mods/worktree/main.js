@@ -251,9 +251,8 @@ export default class Worktree extends View {
         .id(`wt-${i}`)
         .flex_none()
         .h(44)
-        .px(10)
+        .px(16)
         .justify_center()
-        .rounded(7)
         .cursor_pointer()
         .when(on, (el) => el.bg(t.selected))
         .when(!on, (el) => el.hover((s) => s.bg(t.hover)))
@@ -275,16 +274,16 @@ export default class Worktree extends View {
       .track_focus(this.handle)
       .on_key_down((e, cx) => this.key(e, cx))
       .size_full()
-      .p(16)
-      .gap(10)
+      .border_1()
+      .border_color(t.border)
       .bg(t.popover)
       .text_size(13)
-      .child(h_flex().child(div().flex_1().font_semibold().text_color(t.foreground).child(`Open worktree${r ? ` of ${r.name}` : ""}`)).child(div().text_size(11).text_color(t.dim).child(r ? count : "")))
-      .when(r === undefined || (r && this.list === undefined), (el) => el.child(div().text_color(t.muted).child("\u2026")))
-      .when(r === null, (el) => el.child(div().text_color(t.muted).child(`${this.folder ? tilde(this.folder, this.userHome ?? "") : "This folder"} is not in a git repository.`)))
+      .child(h_flex().px(16).py(12).child(div().flex_1().font_semibold().text_color(t.foreground).child(`Open worktree${r ? ` of ${r.name}` : ""}`)).child(div().text_size(11).text_color(t.dim).child(r ? count : "")))
+      .when(r === undefined || (r && this.list === undefined), (el) => el.child(div().px(16).py(8).text_color(t.muted).child("\u2026")))
+      .when(r === null, (el) => el.child(div().px(16).py(8).text_color(t.muted).child(`${this.folder ? tilde(this.folder, this.userHome ?? "") : "This folder"} is not in a git repository.`)))
       .when(Boolean(r && this.list), (el) =>
         el
-          .child(Input.new(this.input).h(32).px(10).items_center().rounded(6).border(1).border_color(this.inputFocused ? t.accent : t.input).bg(t.background).text_color(t.foreground))
+          .child(Input.new(this.input).h(32).px(16).items_center().border(1).border_color(this.inputFocused ? t.accent : t.input).bg(t.background).text_color(t.foreground))
           .child(
             div()
               .relative()
@@ -296,12 +295,12 @@ export default class Worktree extends View {
                   .size_full()
                   .overflow_y_scroll()
                   .children(rows.map(row))
-                  .when(rows.length === 0, (el) => el.child(div().p(10).text_color(t.dim).child("No matching worktrees."))),
+                  .when(rows.length === 0, (el) => el.child(div().px(16).py(10).text_color(t.dim).child("No matching worktrees."))),
               )
               .child(Scrollbar.vertical("wt-list").absolute().inset_0()),
           ),
       )
-      .child(h_flex().justify_end().text_size(11).text_color(t.dim).child("\u2191\u2193 choose \u00b7 \u21b5 open \u00b7 esc close"));
+      .child(h_flex().h(32).px(16).items_center().justify_end().text_size(11).text_color(t.dim).child("\u2191\u2193 choose \u00b7 \u21b5 open \u00b7 esc close"));
   }
 
   render(cx) {
@@ -327,22 +326,24 @@ export default class Worktree extends View {
       .track_focus(this.handle)
       .on_key_down((e, cx) => this.key(e, cx))
       .size_full()
-      .p(16)
-      .gap(10)
+      .border_1()
+      .border_color(t.border)
       .bg(t.popover)
       .text_size(13)
-      .child(div().font_semibold().text_color(t.foreground).child(title))
-      .child(div().text_color(t.muted).child(detail))
-      .when(remove && this.dirty, (el) => el.child(div().text_color(t.blocked).child("It has uncommitted changes: they will be lost.")))
-      .when(remove && this.unpushed.length > 0, (el) => el.child(div().text_color(t.blocked).child(`Submodule ${this.unpushed.join(", ")} has commits that aren't pushed anywhere: they will be lost.`)))
-      .when(Boolean(this.error), (el) => el.child(div().text_color(t.blocked).child(this.error)))
+      .child(div().px(16).py(12).font_semibold().text_color(t.foreground).child(title))
+      .child(div().px(16).py(8).text_color(t.muted).child(detail))
+      .when(remove && this.dirty, (el) => el.child(div().px(16).py(8).text_color(t.blocked).child("It has uncommitted changes: they will be lost.")))
+      .when(remove && this.unpushed.length > 0, (el) => el.child(div().px(16).py(8).text_color(t.blocked).child(`Submodule ${this.unpushed.join(", ")} has commits that aren't pushed anywhere: they will be lost.`)))
+      .when(Boolean(this.error), (el) => el.child(div().px(16).py(8).text_color(t.blocked).child(this.error)))
       .child(div().flex_1())
       .child(
         h_flex()
+          .h(32)
+          .px(16)
+          .items_center()
           .justify_end()
           .text_size(11)
           .text_color(t.dim)
-          .gap(6)
           .when(this.busy, (el) => el.child(div().frames(["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"], 90)))
           .child(this.busy ? "working…" : blocked ? "esc close" : remove ? "↵ remove · esc cancel" : this.error ? "↵ retry · esc close" : "creating…"),
       );

@@ -1,9 +1,5 @@
 {
   "id": "root",
-  "cloned_from": {
-    "name": "square-dracula",
-    "version": "0.1.9"
-  },
   "type": "row",
   "children": [
     {
@@ -59,7 +55,7 @@
               "id": "tabs",
               "type": "block",
               "content": {
-                "mod": "square-dracula-tabs"
+                "mod": "tabs"
               },
               "size": {
                 "px": 21
@@ -78,7 +74,7 @@
                     "pane": {
                       "header": {
                         "content": {
-                          "mod": "square-dracula-pane"
+                          "mod": "pane"
                         },
                         "reveal": "always",
                         "height": 30,
@@ -111,14 +107,14 @@
                           "id": "files",
                           "type": "block",
                           "content": {
-                            "mod": "square-dracula-files"
+                            "mod": "files"
                           }
                         },
                         {
                           "id": "changes",
                           "type": "block",
                           "content": {
-                            "mod": "square-dracula-changes"
+                            "mod": "changes"
                           }
                         }
                       ],
@@ -173,6 +169,5 @@
     12,
     16
   ],
-  "preview": "layouts/rowan-terminal.png",
-  "terminal_menu": "square-dracula-menu"
+  "terminal_menu": "menu"
 }

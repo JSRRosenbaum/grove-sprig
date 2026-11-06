@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### Changed
+- The Sprig front-end ships inside the app binary. The 19 customization mods,
+  the `rowan-terminal` layout and its theme are the app's owned defaults
+  (`defaults/mods`, `defaults/layouts`, `defaults/themes`), embedded at build
+  time and written into the app home when the app starts: one artifact per
+  release, no per-host front-end payload. `sprig/install.py` installs the key
+  profile, the OMP companion beside `herdr-core`, the legacy helper modules and
+  the worktree runtime, and retires the front-end files it installed on earlier
+  machines.
+- The appearance now rides on the mods Herdr ships instead of clones of the
+  0.1.7 ones, so upstream behavior the clones lacked is back: the Changes
+  panel's commit workflow, per-folder saved navigation in Files, the sidebar
+  following panel width, and worktree dialog timeouts.
+- A window with no layout chosen opens on `rowan-terminal`. `app.reset` and a
+  layout whose mods are missing still fall back to `main`, the plain Herdr
+  screen.
+
 ### Fixed
 - New worktree immediately creates an automatically named branch and workspace,
   without a title prompt or confirmation keystroke.
