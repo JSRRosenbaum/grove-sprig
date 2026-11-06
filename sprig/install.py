@@ -22,11 +22,32 @@ legacy_keys = importlib.util.module_from_spec(_compiler_spec)
 _compiler_spec.loader.exec_module(legacy_keys)
 MANIFEST = '.rowan-install-manifest.json'
 
-# Names the retired customization bundle owned. The app's shipped defaults use
-# none of them, so a directory or asset under one of these names in an app home
-# is the old payload, not the app's and not the person's.
+# Names the retired customization bundle owned, so a pre-manifest app home can
+# be cleaned without a complete manifest: `mods/rowan-*` and
+# `mods/square-dracula-*` directories, and `rowan-terminal.*` under layouts/ and
+# themes/. The folded front-end kept some of these names for the defaults the
+# binary ships, so `shipped_defaults()` keeps the app's own files out of it.
 RETIRED_MOD_PREFIXES = ('rowan-', 'square-dracula-')
 RETIRED_ASSET_STEM = 'rowan-terminal'
+
+
+def shipped_defaults():
+    """Names the app binary ships, which it writes into the app home at launch.
+
+    Retiring one of these is churn: the next launch writes the file back, and
+    deleting it under a running window makes that window reload a file that is
+    gone (`mod rowan-spaces … does not exist`, `theme "rowan-terminal" is not
+    one of …`). The app owns these names, so the installer leaves them alone.
+    """
+    defaults = ROOT.parent / 'defaults'
+    mods = defaults / 'mods'
+    names = {path.name for path in mods.iterdir()} if mods.is_dir() else set()
+    assets = set()
+    for folder in ('layouts', 'themes'):
+        directory = defaults / folder
+        if directory.is_dir():
+            assets = assets | {path.name for path in directory.iterdir() if path.is_file()}
+    return names, assets
 
 
 def json_object(data, description):
@@ -189,6 +210,16 @@ def install(app_home, agent_home, backup_home, legacy_config=None, legacy_machin
     roots = {'app': app_home, 'agent': agent_home}
     for kind, relative in files:
         owned_path(kind, relative)
+    shipped_mods, shipped_assets = shipped_defaults()
+    protected = 0
+
+    def shipped(relative):
+        """True for an app-home front-end path the binary ships and rewrites."""
+        path = Path(relative)
+        if len(path.parts) >= 2 and path.parts[0] == 'mods':
+            return path.parts[1] in shipped_mods
+        return path.parts[0] in ('layouts', 'themes') and path.name in shipped_assets
+
     stale = previous - files.keys()
     contents = {
         destination_path(roots[kind], relative): data
@@ -204,12 +235,12 @@ def install(app_home, agent_home, backup_home, legacy_config=None, legacy_machin
     contents[manifest_path] = (json.dumps(new_manifest, indent=2) + '\n').encode()
     # The retired bundle owned whole directories, and installers before the
     # ownership manifest wrote some of them without recording them, so the
-    # manifest alone leaves phantom mods behind. `mods/rowan-*` and
-    # `mods/square-dracula-*` are names the retired bundle owned and no shipped
-    # default uses, and `rowan-terminal.*` under layouts/ and themes/ is its
-    # layout and theme. Anything else in those folders is personal and stays;
-    # every retirement is backed up like any other change.
-    deletions = {destination_path(roots[kind], relative) for kind, relative in stale}
+    # manifest alone leaves phantom mods behind. The namespaces above name the
+    # bundle; names the binary ships belong to the app and are left in place.
+    # Anything else in those folders is personal and stays; every retirement is
+    # backed up like any other change.
+    deletions = {destination_path(roots[kind], relative) for kind, relative in stale
+                 if not (kind == 'app' and shipped(relative))}
     retired_dirs, pruned = [], []
     mods_root = destination_path(app_home, 'mods')
     if mods_root.is_dir():
@@ -218,6 +249,9 @@ def install(app_home, agent_home, backup_home, legacy_config=None, legacy_machin
                 raise ValueError(f'Refusing symlink below installation root: {directory}')
             if not directory.is_dir() or not directory.name.startswith(RETIRED_MOD_PREFIXES):
                 continue
+            if directory.name in shipped_mods:
+                protected += 1
+                continue
             retired_dirs.append(directory)
             for path in sorted(directory.rglob('*')):
                 if path.is_symlink():
@@ -225,9 +259,12 @@ def install(app_home, agent_home, backup_home, legacy_config=None, legacy_machin
                 if path.is_file():
                     deletions.add(path)
     for folder in ('layouts', 'themes'):
-        shipped = destination_path(app_home, folder)
-        if shipped.is_dir():
-            for path in sorted(shipped.glob(RETIRED_ASSET_STEM + '.*')):
+        folder_root = destination_path(app_home, folder)
+        if folder_root.is_dir():
+            for path in sorted(folder_root.glob(RETIRED_ASSET_STEM + '.*')):
+                if path.name in shipped_assets:
+                    protected += 1
+                    continue
                 if path.is_file():
                     deletions.add(path)
     destinations = list(contents) + sorted(deletions)
@@ -296,6 +333,7 @@ def install(app_home, agent_home, backup_home, legacy_config=None, legacy_machin
     print(json.dumps({'app_home': str(app_home), 'agent_home': str(agent_home),
                       'backup': str(backup_home), 'installed_files': len(files),
                       'retired_files': len(deletions), 'retired_mod_dirs': len(pruned),
+                      'protected_defaults': protected,
                       'settings_preserved': True}, indent=2))
 
 

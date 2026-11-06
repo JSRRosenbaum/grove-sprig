@@ -1,5 +1,7 @@
-import importlib.util
+import contextlib
 import errno
+import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -46,7 +48,10 @@ class InstallerTests(unittest.TestCase):
 
     def install(self):
         self.counter += 1
-        installer.install(self.app, self.agent, self.root / f'backup-{self.counter}', self.config)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            installer.install(self.app, self.agent, self.root / f'backup-{self.counter}', self.config)
+        return json.loads(out.getvalue())
 
     def put(self, path, content):
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -215,47 +220,54 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual((self.app / 'mods/my-mods/main.js').read_bytes(), b'personal mod')
         self.assertEqual((self.app / 'layouts/my-layout.json').read_bytes(), b'{"type": "row"}')
 
-    def test_retired_frontend_files_are_removed_on_upgrade(self):
+    def test_stale_manifest_entries_the_app_ships_are_left_to_the_app(self):
         legacy = {'version': 1, 'agent_home': str(self.agent), 'bindings': {},
                   'files': [{'root': 'app', 'path': 'mods/rowan-agents/main.js'},
-                            {'root': 'app', 'path': 'layouts/rowan-terminal.json'},
+                            {'root': 'app', 'path': 'mods/square-dracula-tabs/main.js'},
                             {'root': 'app', 'path': 'themes/rowan-terminal.json'}]}
-        self.put(self.app / 'mods/rowan-agents/main.js', b'installed by the old installer')
-        self.put(self.app / 'layouts/rowan-terminal.json', b'{}')
+        self.put(self.app / 'mods/rowan-agents/main.js', b'app default')
+        self.put(self.app / 'mods/square-dracula-tabs/main.js', b'clone')
         self.put(self.app / 'themes/rowan-terminal.json', b'{}')
         self.put(self.app / '.rowan-install-manifest.json', json.dumps(legacy).encode())
-        self.install()
-        self.assertFalse((self.app / 'mods/rowan-agents/main.js').exists())
-        self.assertFalse((self.app / 'layouts/rowan-terminal.json').exists())
-        self.assertFalse((self.app / 'themes/rowan-terminal.json').exists())
+        receipt = self.install()
+        self.assertEqual((self.app / 'mods/rowan-agents/main.js').read_bytes(), b'app default')
+        self.assertEqual((self.app / 'themes/rowan-terminal.json').read_bytes(), b'{}')
+        self.assertFalse((self.app / 'mods/square-dracula-tabs/main.js').exists())
+        self.assertEqual(receipt['retired_mod_dirs'], 1)
         self.assertTrue((self.app / 'keys.json').is_file())
 
     def test_retired_namespace_is_removed_without_manifest_entries(self):
         # Installers before the ownership manifest wrote the bundle without
-        # recording it, so the names it used retire with it. A directory left
-        # holding only the app's own type stubs goes with it; personal names
-        # stay, and every retirement is restorable from the backup.
-        self.put(self.app / 'mods/rowan-spaces/main.js', b'old payload')
-        self.put(self.app / 'mods/rowan-spaces/gpui-kit.d.ts', b'app type stub')
+        # recording it, so the names it used retire with it — except the names
+        # the binary ships, which are the app's: retiring those churns, and
+        # deleting them under a running window makes that window reload files
+        # that are gone. Personal names stay, and every retirement is
+        # restorable from the backup.
+        self.put(self.app / 'mods/rowan-spaces/main.js', b'app default')
+        self.put(self.app / 'mods/rowan-legacy-sidebar/main.js', b'unshipped clone')
+        self.put(self.app / 'mods/rowan-legacy-sidebar/gpui-kit.d.ts', b'app type stub')
         self.put(self.app / 'mods/square-dracula-tabs/main.js', b'old payload')
         self.put(self.app / 'mods/my-spaces/main.js', b'personal mod')
-        self.put(self.app / 'layouts/rowan-terminal.json', b'{}')
+        self.put(self.app / 'layouts/rowan-terminal.json', b'{"type": "row"}')
         self.put(self.app / 'layouts/rowan-terminal.png', b'png')
         self.put(self.app / 'layouts/my-layout.json', b'{"type": "row"}')
         self.put(self.app / 'themes/rowan-terminal.json', b'{}')
         self.put(self.app / 'themes/my-theme.json', b'{}')
-        self.install()
-        self.assertFalse((self.app / 'mods/rowan-spaces').exists())
+        receipt = self.install()
+        self.assertEqual((self.app / 'mods/rowan-spaces/main.js').read_bytes(), b'app default')
+        self.assertEqual((self.app / 'layouts/rowan-terminal.json').read_bytes(), b'{"type": "row"}')
+        self.assertEqual((self.app / 'themes/rowan-terminal.json').read_bytes(), b'{}')
+        self.assertFalse((self.app / 'mods/rowan-legacy-sidebar').exists())
         self.assertFalse((self.app / 'mods/square-dracula-tabs').exists())
-        self.assertFalse((self.app / 'layouts/rowan-terminal.json').exists())
         self.assertFalse((self.app / 'layouts/rowan-terminal.png').exists())
-        self.assertFalse((self.app / 'themes/rowan-terminal.json').exists())
         self.assertEqual((self.app / 'mods/my-spaces/main.js').read_bytes(), b'personal mod')
         self.assertEqual((self.app / 'layouts/my-layout.json').read_bytes(), b'{"type": "row"}')
         self.assertEqual((self.app / 'themes/my-theme.json').read_bytes(), b'{}')
+        self.assertEqual(receipt['protected_defaults'], 3)
         saved = {entry['path'] for entry in json.loads((self.root / 'backup-1/manifest.json').read_text())}
-        self.assertIn(str(self.app / 'mods/rowan-spaces/main.js'), saved)
-        self.assertIn(str(self.app / 'mods/rowan-spaces/gpui-kit.d.ts'), saved)
+        self.assertIn(str(self.app / 'mods/square-dracula-tabs/main.js'), saved)
+        self.assertIn(str(self.app / 'mods/rowan-legacy-sidebar/gpui-kit.d.ts'), saved)
+        self.assertNotIn(str(self.app / 'mods/rowan-spaces/main.js'), saved)
 
     def test_cli_explicit_roots_and_environment_defaults(self):
         app, agent = self.root / 'cli-app', self.root / 'cli-agent'

@@ -21,9 +21,16 @@
 - The installer retires the bundle's namespaces in an existing app home —
   `mods/rowan-*`, `mods/square-dracula-*`, `layouts/rowan-terminal.*`,
   `themes/rowan-terminal.*` — because installers before the ownership manifest
-  wrote part of the bundle without recording it. Rowan's app home cleared 19 mod
-  directories and 77 files, each copied to the backup home first. Layouts,
-  themes and mods under any other name are personal and stay.
+  wrote part of the bundle without recording it. Names the app binary ships are
+  left to the app: the folded front-end kept some of those names
+  (`mods/rowan-spaces`, `layouts/rowan-terminal.json`,
+  `themes/rowan-terminal.json`), and retiring a file the app owns means the next
+  launch writes it back while a running window reloads a file that is gone. The
+  receipt reports `protected_defaults`. Rowan's app home converged to its 27
+  shipped mods with 16 clone directories retired, 8 shipped files protected, and
+  both live windows reporting no errors. Layouts, themes and mods under any other
+  name are personal and stay, and everything removed is copied to the backup
+  home first.
 
 ### Fixed
 - New worktree immediately creates an automatically named branch and workspace,
