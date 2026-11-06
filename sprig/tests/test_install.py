@@ -55,7 +55,7 @@ class InstallerTests(unittest.TestCase):
     def test_preserves_configuration_and_unowned_files(self):
         original = {'global': {'ctrl-x': 'personal'}, 'layout:rowan-terminal': {'custom': 'mine'}}
         self.put(self.app / 'keys.json', json.dumps(original).encode())
-        preserved = ['settings.json', 'shared.json', 'data/foo', 'window.json', 'profiles/a.json', 'mods/rowan-spaces/personal.js', 'mods/other/main.js']
+        preserved = ['settings.json', 'shared.json', 'data/foo', 'window.json', 'profiles/a.json', 'mods/my-spaces/personal.js', 'mods/other/main.js']
         for name in preserved:
             self.put(self.app / name, b'personal bytes')
         self.put(self.agent / 'extensions/personal.ts', b'personal extension')
@@ -206,14 +206,14 @@ class InstallerTests(unittest.TestCase):
         asset.write_bytes(b'old module')
         self.install()
         self.put(self.app / 'plugin_runtimes/workthreads/herdr_workthreads/user.py', b'user module')
-        self.put(self.app / 'mods/rowan-spaces/main.js', b'app owned')
-        self.put(self.app / 'layouts/rowan-terminal.json', b'{"type": "row"}')
+        self.put(self.app / 'mods/my-mods/main.js', b'personal mod')
+        self.put(self.app / 'layouts/my-layout.json', b'{"type": "row"}')
         asset.unlink()
         self.install()
         self.assertFalse((self.app / 'plugin_runtimes/workthreads/herdr_workthreads/old.py').exists())
         self.assertEqual((self.app / 'plugin_runtimes/workthreads/herdr_workthreads/user.py').read_bytes(), b'user module')
-        self.assertEqual((self.app / 'mods/rowan-spaces/main.js').read_bytes(), b'app owned')
-        self.assertEqual((self.app / 'layouts/rowan-terminal.json').read_bytes(), b'{"type": "row"}')
+        self.assertEqual((self.app / 'mods/my-mods/main.js').read_bytes(), b'personal mod')
+        self.assertEqual((self.app / 'layouts/my-layout.json').read_bytes(), b'{"type": "row"}')
 
     def test_retired_frontend_files_are_removed_on_upgrade(self):
         legacy = {'version': 1, 'agent_home': str(self.agent), 'bindings': {},
@@ -229,6 +229,33 @@ class InstallerTests(unittest.TestCase):
         self.assertFalse((self.app / 'layouts/rowan-terminal.json').exists())
         self.assertFalse((self.app / 'themes/rowan-terminal.json').exists())
         self.assertTrue((self.app / 'keys.json').is_file())
+
+    def test_retired_namespace_is_removed_without_manifest_entries(self):
+        # Installers before the ownership manifest wrote the bundle without
+        # recording it, so the names it used retire with it. A directory left
+        # holding only the app's own type stubs goes with it; personal names
+        # stay, and every retirement is restorable from the backup.
+        self.put(self.app / 'mods/rowan-spaces/main.js', b'old payload')
+        self.put(self.app / 'mods/rowan-spaces/gpui-kit.d.ts', b'app type stub')
+        self.put(self.app / 'mods/square-dracula-tabs/main.js', b'old payload')
+        self.put(self.app / 'mods/my-spaces/main.js', b'personal mod')
+        self.put(self.app / 'layouts/rowan-terminal.json', b'{}')
+        self.put(self.app / 'layouts/rowan-terminal.png', b'png')
+        self.put(self.app / 'layouts/my-layout.json', b'{"type": "row"}')
+        self.put(self.app / 'themes/rowan-terminal.json', b'{}')
+        self.put(self.app / 'themes/my-theme.json', b'{}')
+        self.install()
+        self.assertFalse((self.app / 'mods/rowan-spaces').exists())
+        self.assertFalse((self.app / 'mods/square-dracula-tabs').exists())
+        self.assertFalse((self.app / 'layouts/rowan-terminal.json').exists())
+        self.assertFalse((self.app / 'layouts/rowan-terminal.png').exists())
+        self.assertFalse((self.app / 'themes/rowan-terminal.json').exists())
+        self.assertEqual((self.app / 'mods/my-spaces/main.js').read_bytes(), b'personal mod')
+        self.assertEqual((self.app / 'layouts/my-layout.json').read_bytes(), b'{"type": "row"}')
+        self.assertEqual((self.app / 'themes/my-theme.json').read_bytes(), b'{}')
+        saved = {entry['path'] for entry in json.loads((self.root / 'backup-1/manifest.json').read_text())}
+        self.assertIn(str(self.app / 'mods/rowan-spaces/main.js'), saved)
+        self.assertIn(str(self.app / 'mods/rowan-spaces/gpui-kit.d.ts'), saved)
 
     def test_cli_explicit_roots_and_environment_defaults(self):
         app, agent = self.root / 'cli-app', self.root / 'cli-agent'

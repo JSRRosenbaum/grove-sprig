@@ -98,6 +98,14 @@ prevents removal of unrelated files. Existing settings and machine/session state
 are not replaced, and the installer never touches the front-end files the app
 owns. Do not run another installer concurrently.
 
+The installer also clears the retired bundle out of your app home: files an
+earlier installer recorded, plus anything named `mods/rowan-*`,
+`mods/square-dracula-*`, `layouts/rowan-terminal.*` or
+`themes/rowan-terminal.*` — names the retired bundle owned and no shipped
+default uses. Every removal is copied to the backup home first, and a
+`manifest.json` there maps each path to its saved copy. Layouts, themes and mods
+under any other name are yours and stay.
+
 To remove the customization, first switch the selected window to another layout.
 Use `.rowan-install-manifest.json` in your app home to identify the files the
 installer owns; preserve unrelated files and personal keybindings. Backup

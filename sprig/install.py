@@ -22,6 +22,12 @@ legacy_keys = importlib.util.module_from_spec(_compiler_spec)
 _compiler_spec.loader.exec_module(legacy_keys)
 MANIFEST = '.rowan-install-manifest.json'
 
+# Names the retired customization bundle owned. The app's shipped defaults use
+# none of them, so a directory or asset under one of these names in an app home
+# is the old payload, not the app's and not the person's.
+RETIRED_MOD_PREFIXES = ('rowan-', 'square-dracula-')
+RETIRED_ASSET_STEM = 'rowan-terminal'
+
 
 def json_object(data, description):
     try:
@@ -196,7 +202,34 @@ def install(app_home, agent_home, backup_home, legacy_config=None, legacy_machin
         'files': [{'root': kind, 'path': relative} for kind, relative in sorted(files)],
     }
     contents[manifest_path] = (json.dumps(new_manifest, indent=2) + '\n').encode()
+    # The retired bundle owned whole directories, and installers before the
+    # ownership manifest wrote some of them without recording them, so the
+    # manifest alone leaves phantom mods behind. `mods/rowan-*` and
+    # `mods/square-dracula-*` are names the retired bundle owned and no shipped
+    # default uses, and `rowan-terminal.*` under layouts/ and themes/ is its
+    # layout and theme. Anything else in those folders is personal and stays;
+    # every retirement is backed up like any other change.
     deletions = {destination_path(roots[kind], relative) for kind, relative in stale}
+    retired_dirs, pruned = [], []
+    mods_root = destination_path(app_home, 'mods')
+    if mods_root.is_dir():
+        for directory in sorted(mods_root.iterdir()):
+            if directory.is_symlink():
+                raise ValueError(f'Refusing symlink below installation root: {directory}')
+            if not directory.is_dir() or not directory.name.startswith(RETIRED_MOD_PREFIXES):
+                continue
+            retired_dirs.append(directory)
+            for path in sorted(directory.rglob('*')):
+                if path.is_symlink():
+                    raise ValueError(f'Refusing symlink below installation root: {path}')
+                if path.is_file():
+                    deletions.add(path)
+    for folder in ('layouts', 'themes'):
+        shipped = destination_path(app_home, folder)
+        if shipped.is_dir():
+            for path in sorted(shipped.glob(RETIRED_ASSET_STEM + '.*')):
+                if path.is_file():
+                    deletions.add(path)
     destinations = list(contents) + sorted(deletions)
     originals = {
         destination: destination.read_bytes() if destination.exists() else None
@@ -252,8 +285,17 @@ def install(app_home, agent_home, backup_home, legacy_config=None, legacy_machin
         for temporary in (*staged.values(), *restores.values()):
             if temporary not in failed_restores:
                 temporary.unlink(missing_ok=True)
+    # Retired mod directories go last of all: the transaction's rollback copies
+    # live inside them until the block above ends, so only now is a retired
+    # directory empty exactly when it should be. Nothing is restored into one
+    # after this point, so removing it cannot break a rollback.
+    for directory in retired_dirs:
+        if directory.is_dir() and not any(directory.iterdir()):
+            directory.rmdir()
+            pruned.append(directory)
     print(json.dumps({'app_home': str(app_home), 'agent_home': str(agent_home),
                       'backup': str(backup_home), 'installed_files': len(files),
+                      'retired_files': len(deletions), 'retired_mod_dirs': len(pruned),
                       'settings_preserved': True}, indent=2))
 
 
