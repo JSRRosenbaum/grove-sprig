@@ -52,6 +52,23 @@ window opened on `rowan-terminal`, the herd sidebar listed Local, ash and auri,
 `rowan-spaces.worktree-new` and `rowan-spaces.herd-next` executed, and nothing
 was reported in `errors`.
 
+Deployed 2026-11-06 from Ash (`rustc 1.95.0`, `zig 0.16.0`): one ELF, sha256
+`7b51e0be8cca0c0692c8d3d3d26d3058c98ef631499eda3689e31abdc3d49a6e`, installed as
+`sprig-c9bcc24` on Rowan and Ash with the `~/.local/bin/herdr-app` symlink
+repointed and the previous releases kept for rollback. Ash has no authored key
+profile of its own, so its `keys.json` and `legacy-keys.json` were restored from
+the installer's own backup and compared by sha256 (`472b0286…` before and after);
+its app home retired 14 mod directories and 62 files. Retire the payload only
+after the frontend reopens on the new binary: a running old build reloads
+`layouts/rowan-terminal.json` and needs `themes/rowan-terminal.json`, so Rowan's
+retired payload was restored for the live window and is retired again on the next
+`install.py` run. Lappy is not updated — its WireGuard proxy peer `10.99.0.3`
+answers to neither Rowan nor Ash — so the Windows artifact is staged on Ash at
+`~/.cache/sprig-windows-20261106/app/dist/herdr-app-windows-x86_64.tar.gz`
+(sha256 `641973b11655b219027d0f05913ed233639126faaa73fba900a8b79975bd33ef`,
+`herdr-app.exe` `2947dc7b81b61db2f3949dc58533ed3b32e7dbdb394c3ec236c225bca2d8c222`,
+no dynamic CRT import) and is one transfer and one `install.py` away.
+
 ## Upstream rebase — 2026-11-06
 
 The app source now sits on the upstream head `herdrdev/herdr-app`
