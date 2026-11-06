@@ -18,6 +18,12 @@
 - A window with no layout chosen opens on `rowan-terminal`. `app.reset` and a
   layout whose mods are missing still fall back to `main`, the plain Herdr
   screen.
+- The installer retires the bundle's namespaces in an existing app home —
+  `mods/rowan-*`, `mods/square-dracula-*`, `layouts/rowan-terminal.*`,
+  `themes/rowan-terminal.*` — because installers before the ownership manifest
+  wrote part of the bundle without recording it. Rowan's app home cleared 19 mod
+  directories and 77 files, each copied to the backup home first. Layouts,
+  themes and mods under any other name are personal and stay.
 
 ### Fixed
 - New worktree immediately creates an automatically named branch and workspace,

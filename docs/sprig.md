@@ -32,13 +32,25 @@ goes with the clones; attribution stays in `NOTICE` and `upstreams.json`.
 
 Validation on this tree: `cargo build --locked` clean; `cargo test --locked` 394
 tests pass (364 app, 26 integration, 4 across three smaller targets), 2 ignored;
-48 Python installer tests; 59 Node mod-consumer tests, with the worktree
+49 Python installer tests; 59 Node mod-consumer tests, with the worktree
 consumer test restored beside the canonical mod; 41 Bun script tests over files,
 picker, palette, agents, spaces and worktree. A fresh app home on a private
 headless display converged from the binary alone — 27 mods, the 4 shipped
 layouts and 3 themes written on launch, no payload step — opened on
 `rowan-terminal`, and rendered the herd sidebar, numbered tabs, pane header and
 the Changes panel with its commit box, with no reported errors.
+
+The manifest alone was not enough: installers before it wrote part of the bundle
+without recording it, so `install.py` retires the bundle's namespaces as well —
+`mods/rowan-*`, `mods/square-dracula-*`, `layouts/rowan-terminal.*`,
+`themes/rowan-terminal.*`. Rowan's app home cleared 19 mod directories and 77
+files, each copied to the backup home first, while `layouts/square-dracula.json`
+and `themes/omarchy.json` — personal names — stayed. Verified against a copy of
+that converged app home on the release binary: 27 mods written on launch, the
+window opened on `rowan-terminal`, the herd sidebar listed Local, ash and auri,
+`mod.open` opened the keybinds overlay over the compiled profile's 68 bindings,
+`rowan-spaces.worktree-new` and `rowan-spaces.herd-next` executed, and nothing
+was reported in `errors`.
 
 ## Upstream rebase — 2026-11-06
 
