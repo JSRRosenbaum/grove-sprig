@@ -58,12 +58,20 @@ Deployed 2026-11-06 from Ash (`rustc 1.95.0`, `zig 0.16.0`): one ELF, sha256
 repointed and the previous releases kept for rollback. Ash has no authored key
 profile of its own, so its `keys.json` and `legacy-keys.json` were restored from
 the installer's own backup and compared by sha256 (`472b0286…` before and after);
-its app home retired 14 mod directories and 62 files. Retire the payload only
-after the frontend reopens on the new binary: a running old build reloads
-`layouts/rowan-terminal.json` and needs `themes/rowan-terminal.json`, so Rowan's
-retired payload was restored for the live window and is retired again on the next
-`install.py` run. Lappy is not updated — its WireGuard proxy peer `10.99.0.3`
-answers to neither Rowan nor Ash — so the Windows artifact is staged on Ash at
+its app home retired 14 mod directories and 62 files. Retire the payload with the
+frontend **closed**: the app installs its mods, layout and theme at launch, so
+deleting them under a running window — old build or new — makes that window
+reload files that are gone and report `mod rowan-spaces … does not exist` and
+`theme "rowan-terminal" is not one of graphite, ink, moss, paper`. Proven on a
+copy of Rowan's live app home: retiring into the closed copy left 21 mods, 5
+layouts and 3 themes (personal files only), and launching the release binary
+wrote back 27 mods, 6 layouts and 4 themes, opened on `rowan-terminal` with no
+reported errors. Rowan therefore keeps its payload installed until the frontend
+is next closed; `~/retire-payload.sh` does the retirement, compiles the key
+profile from the authored `legacy-profile.toml` and refuses to run while a window
+is live. Builds happen on Ash; Rowan installs the artifact it produces. Lappy is
+not updated — its WireGuard proxy peer `10.99.0.3` answers to neither host — so
+the Windows artifact is staged on Ash at
 `~/.cache/sprig-windows-20261106/app/dist/herdr-app-windows-x86_64.tar.gz`
 (sha256 `641973b11655b219027d0f05913ed233639126faaa73fba900a8b79975bd33ef`,
 `herdr-app.exe` `2947dc7b81b61db2f3949dc58533ed3b32e7dbdb394c3ec236c225bca2d8c222`,
