@@ -595,19 +595,23 @@ test('heading click jitter folds but cancelled, stale and cross-herd drags never
   }
 });
 
-test('workspace rows show names and stable tags, never branch metadata', async () => {
+test('workspace rows show names and the terminal address, never branch metadata', async () => {
   const {mod, world} = await setup();
   const texts = node => typeof node === 'string' ? [node] : node?.items?.flatMap(texts) ?? [];
   const find = (node, id) => node?.idValue === id ? node : node?.items?.map(x => find(x, id)).find(Boolean);
   for (const branch of ['main', 'feature/visible-branch', 'worktree/quiet-river', '(detached)']) {
     const workspace = {...space('a'), name: 'Graph UI', branch};
     world.spaces = [workspace]; mod.shown = new Set(['a']); mod.inventory(world.spaces);
+    world.panes = [{tab: 'a-tab', pane: 'a-pane', terminal: 't7', focused: true, cwd: workspace.folder}];
     const metadata = git(null, workspace.folder, '/project/.git');
     mod.git[metadata.key] = {...metadata.value, branch};
     const row = find(mod.render({spawn: fn => fn()}), 'space-a');
     const rendered = texts(row);
     assert.ok(rendered.includes('Graph UI'));
-    assert.ok(rendered.includes(mod.label(workspace)));
+    assert.ok(rendered.includes(mod.refOf(workspace)));
+    // The per-screen `w` tag is retired as a display id: agents and `hc` name a
+    // workspace by its terminal address, and the row says what they say.
+    assert.ok(!rendered.includes(mod.label(workspace)));
     assert.ok(!rendered.some(text => text.includes(branch)));
   }
 });

@@ -382,9 +382,9 @@ export default class Agents extends View {
     };
     const detail = new Map(list.map(a => [a.address, /^\d+$/.test(label(a)) ? null : label(a)]));
     const seen = {};
-    for (const a of list) { const k = `${scope?.labels?.[a.space] ?? a.space_name}\u0000${detail.get(a.address) ?? ""}`; seen[k] = (seen[k] ?? 0) + 1; }
+    for (const a of list) { const k = `${scope?.refs?.[a.space] ?? a.space_name}\u0000${detail.get(a.address) ?? ""}`; seen[k] = (seen[k] ?? 0) + 1; }
     for (const a of list) {
-      if (detail.get(a.address) == null && seen[`${scope?.labels?.[a.space] ?? a.space_name}\u0000`] > 1) detail.set(a.address, label(a));
+      if (detail.get(a.address) == null && seen[`${scope?.refs?.[a.space] ?? a.space_name}\u0000`] > 1) detail.set(a.address, label(a));
     }
 
     const row = (a, i, subs = []) => {
@@ -427,7 +427,7 @@ export default class Agents extends View {
       // Under a space header the space goes without saying; an automatic tab number says nothing.
       // Without a space header above (priority, pinned) the row names its space.
       const full = byPriority || isPinned;
-      const name = full ? scope?.labels?.[a.space] || a.space_name || label(a) : more ?? (/^\d+$/.test(label(a)) ? a.program?.name || label(a) : label(a));
+      const name = full ? scope?.refs?.[a.space] || a.space_name || label(a) : more ?? (/^\d+$/.test(label(a)) ? a.program?.name || label(a) : label(a));
       const info = metadataLines(metadata(all.find(k => k.address === a.address), now));
       const secondary = full && more ? [more, ...info] : info;
       const line = h_flex()

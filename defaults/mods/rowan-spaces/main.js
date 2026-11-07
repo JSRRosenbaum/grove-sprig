@@ -39,6 +39,32 @@ function place(s, ps) {
   }
   return best ? best[1] : s.folder;
 }
+
+// The address a space answers to: the focused terminal in the tab it shows,
+// else its first terminal. Remote ids already carry the machine prefix, so this
+// reads exactly as `hc` and the agents name a terminal (t13, nix/t13). One pass
+// over the panes builds the index, as tabFolders does for folders.
+let _psRef = null, _tabRefs = null;
+function tabRefs(ps) {
+  if (ps !== _psRef) {
+    _psRef = ps;
+    _tabRefs = new Map();
+    ps.forEach(p => {
+      if (!p.terminal) return;
+      if (!_tabRefs.has(p.tab) || p.focused) _tabRefs.set(p.tab, p.terminal);
+    });
+  }
+  return _tabRefs;
+}
+function ref(s, ps) {
+  const byTab = tabRefs(ps), tabs = s.tabs ?? [];
+  const shown = tabs.find(c => c.active) ?? tabs[0];
+  for (const c of (shown ? [shown, ...tabs.filter(x => x !== shown)] : tabs)) {
+    const at = byTab.get(c.id);
+    if (at) return at;
+  }
+  return null;
+}
 const where = (s, ps) => JSON.stringify([s.machine ?? null, place(s, ps)]);
 const base = (path) => path.replace(/\/+$/, "").split("/").pop();
 // Changes made outside Herdr (an editor's save, a commit in another app): looked
@@ -155,6 +181,7 @@ export default class Spaces extends View {
     if (changed) this.save();
   }
   label(s) { return this.state.labels[this.spaceKey(s)]; }
+  refOf(s) { return ref(s, model().ps); }
   remember(sp, ps) {
     const f = focused(), h = this.herd();
     if (this.selecting) {
@@ -790,8 +817,10 @@ export default class Spaces extends View {
           .on_click((_e, cx) => { cx.stop_propagation(); this.toggleRepo(r.foldRepo); cx.notify(); }))
         .child(r.foldRepo ? (this.repoFolded.has(r.foldRepo) ? "▸" : "▾") : (r.tree || ""))))
       .child(div().w(this.metrics.fontSize * 0.8).flex_none().text_color(ready ? tone(t, status) : t.muted)
-        .child(ready ? glyph(status) : "·"));
-    if (compact) return line.child(div().text_color(t.muted).child(this.label(w) || "…"));
+        .child(ready ? glyph(status) : "·"))
+      .tooltip(`${ref(w, model().ps) ?? "no terminal"} · ${this.machineName(this.machineKey(w.machine)) ?? "this computer"}` +
+        (w.folder ? ` · ${w.folder}` : ""));
+    if (compact) return line.child(div().min_w(0).truncate().text_color(t.muted).child(this.refOf(w) || "…"));
     return line
       .child(div().flex_1().min_w(0).truncate().text_color(t.foreground)
         .when(active, e => e.font_semibold()).child(w.name))
@@ -802,7 +831,12 @@ export default class Spaces extends View {
         .child(div().id(`space-down-${w.id}`).text_color(t.muted).cursor_pointer()
           .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
           .on_click((_e,cx) => { cx.stop_propagation(); this.moveSpace(w, 1); }).child("↓")))
-      .child(div().w(Math.ceil(this.metrics.fontSize * 2.8)).flex_none().text_right().text_color(t.muted).child(this.label(w) || "…"));
+      .child(div().w(Math.ceil(this.metrics.fontSize * 3.6)).flex_none().min_w(0).truncate().text_right().text_color(t.muted)
+        .cursor_pointer()
+        .tooltip(this.refOf(w) ? `Copy its address (hc get ${this.refOf(w)})` : "This workspace has no terminal yet")
+        .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
+        .on_click((_e, cx) => { cx.stop_propagation(); const at = this.refOf(w); if (at) cx.write_to_clipboard(at); })
+        .child(this.refOf(w) || "…"));
   }
   grouped(t, compact, rows, machines) {
     const h = this.herd();
@@ -885,7 +919,7 @@ export default class Spaces extends View {
     const current = scoped.find(s => s.id === focus?.space);
     const selectedReady = Boolean(current && inventory.some(m => m.name === current.machine && m.layout === "ready"));
     const rows = this.ordered();
-    const scope = {herd: h.id, machineKeys: h.members.map(key => this.machineName(key) ?? "@local"), spaceIds: scoped.map(s => s.id), orderedIds: rows.map(r => r.w.id), labels: Object.fromEntries(scoped.map(s => [s.id, this.label(s)])), selectedReady, empty: scoped.length === 0};
+    const scope = {herd: h.id, machineKeys: h.members.map(key => this.machineName(key) ?? "@local"), spaceIds: scoped.map(s => s.id), orderedIds: rows.map(r => r.w.id), labels: Object.fromEntries(scoped.map(s => [s.id, this.label(s)])), refs: Object.fromEntries(scoped.map(s => [s.id, this.refOf(s)])), selectedReady, empty: scoped.length === 0};
     const surface = selectedReady ? "rowan-workspace" : "rowan-empty";
     if (surface !== this.surfaceDesired) {
       this.surfaceDesired = surface;
