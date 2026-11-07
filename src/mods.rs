@@ -558,6 +558,14 @@ thread_local! {
     static OVERLAY_SEQ: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
+/// The parts of the snapshot a mod may watch for changes.
+const SNAPSHOT_KEYS: [&'static str; 9] =
+    ["layout", "spaces", "machines", "agents", "panes", "terminals", "focused", "floats", "window"];
+
+fn snapshot_key(name: &str) -> Option<&'static str> {
+    SNAPSHOT_KEYS.into_iter().find(|k| *k == name)
+}
+
 pub fn publish_document_core(core: std::sync::Arc<crate::hc::Core>) {
     DOCUMENT_CORE.with_borrow_mut(|slot| *slot = Some(core));
 }
@@ -1134,6 +1142,21 @@ fn module(inst: Instance, copy: u64) -> HostModule {
         .function("machines", reader(reads.clone(), "machines", |s| &s.machines))
         .function("agents", reader(reads.clone(), "agents", |s| &s.agents))
         .function("panes", reader(reads.clone(), "panes", |s| &s.panes))
+        // Change counters for the keys a mod names, so it can read a big list once
+        // per change: every read copies the whole list into the script.
+        .function("revisions", {
+            let reads = reads.clone();
+            move |a| {
+                let mut out = serde_json::Map::new();
+                REVISIONS.with_borrow(|r| {
+                    for key in strings(a.get(0)).iter().filter_map(|k| snapshot_key(k)) {
+                        reads.borrow_mut().record(key, r);
+                        out.insert((*key).to_string(), Value::from(r.get(key).copied().unwrap_or(0)));
+                    }
+                });
+                Ok(to_host(&Value::Object(out)))
+            }
+        })
         .function("setAgentOrder", |a| {
             AGENT_ORDER.with(|s| *s.borrow_mut() = strings(a.get(0)));
             Ok(HostValue::Null)

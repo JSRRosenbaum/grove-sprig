@@ -3,13 +3,41 @@
 
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { spaces, machines, panes, run, openOverlay, exec, hc, readDocument, writeDocument, theme, shared, setShared, watchFolder, window, focused, nextCommand, settings, keys } from "herdr";
+import { spaces, machines, panes, run, openOverlay, exec, hc, readDocument, writeDocument, theme, shared, setShared, watchFolder, window, focused, nextCommand, settings, keys, revisions } from "herdr";
+
+// Every read of a host list copies the whole list into the script, so the model
+// is taken once per change and handed down. `revisions` names the parts watched:
+// it costs nothing while nothing moved, and says when something did.
+let _seen = null, _model = null;
+function model() {
+  const r = revisions(["spaces", "panes", "machines", "focused"]);
+  if (_seen && r.spaces === _seen.spaces && r.panes === _seen.panes &&
+      r.machines === _seen.machines && r.focused === _seen.focused) return _model;
+  _seen = r;
+  return (_model = { sp: spaces(), ps: panes(), ms: machines(), fc: focused() });
+}
 
 // Where a space is now: its first terminal's live folder, else where it was made.
-// `ps`: panes(), read once by the caller (each read copies every pane).
+// `ps`: panes(), read once by the caller (each read copies every pane). The
+// first pane of a tab that reports a folder is that tab's folder, so one pass
+// over the panes answers every space instead of a scan for each.
+let _ps = null, _tabs = null;
+function tabFolders(ps) {
+  if (ps !== _ps) {
+    _ps = ps;
+    _tabs = new Map();
+    ps.forEach((p, i) => { if (p.cwd && !_tabs.has(p.tab)) _tabs.set(p.tab, [i, p.cwd]); });
+  }
+  return _tabs;
+}
 function place(s, ps) {
-  const tabs = new Set((s.tabs ?? []).map((c) => c.id));
-  return ps.find((p) => tabs.has(p.tab) && p.cwd)?.cwd || s.folder;
+  const tabs = tabFolders(ps);
+  let best = null;
+  for (const c of s.tabs ?? []) {
+    const at = tabs.get(c.id);
+    if (at && (best === null || at[0] < best[0])) best = at;
+  }
+  return best ? best[1] : s.folder;
 }
 const where = (s, ps) => JSON.stringify([s.machine ?? null, place(s, ps)]);
 const base = (path) => path.replace(/\/+$/, "").split("/").pop();
@@ -153,6 +181,7 @@ export default class Spaces extends View {
   switchHerd(id) {
     const target = this.state.herds.find(h => h.id === id);
     if (!target || id === this.state.active) return;
+    this.order = (this.order ?? 0) + 1;
     this.remember(spaces(), panes()); this.selecting = null;
     this.drag = null; this.machineDrag = null;
     this.state.active = id; this.menuMachine = null; this.save();
@@ -431,6 +460,7 @@ export default class Spaces extends View {
       if (!slot || slot.identity !== identity) {
         for (const key of Object.keys(this.git)) if (JSON.parse(key)[0] === on && this.gitMachine[key] !== identity) {
           delete this.git[key]; delete this.checked[key]; delete this.gitMachine[key];
+          this.order = (this.order ?? 0) + 1;
           this.unsure.delete(key); this.verified.delete(key);
         }
         slot = {on, identity, ready: false, attempted: false, busy: false, dirty: true, next: 0, error: null};
@@ -480,6 +510,7 @@ export default class Spaces extends View {
       const info = g === null ? null : {name: g.name, repo: JSON.stringify([slot.on, g.commonDir]), linked: g.linked};
       if (!(key in this.git) || JSON.stringify(this.git[key]) !== JSON.stringify(info)) {
         this.git[key] = info; this.checked[key] = Date.now();
+        this.order = (this.order ?? 0) + 1;
         if (info === null) this.unsure.add(key);
       }
       this.gitMachine[key] = slot.identity;
@@ -541,6 +572,7 @@ export default class Spaces extends View {
       const on = JSON.parse(k)[0], identity = this.machineKey(on);
       if (k in this.gitMachine && this.gitMachine[k] !== identity) {
         delete this.git[k]; delete this.checked[k]; delete this.gitMachine[k]; this.unsure.delete(k);
+        this.order = (this.order ?? 0) + 1;
         this.verified.delete(k);
       }
     }
@@ -657,6 +689,7 @@ export default class Spaces extends View {
           else this.git[key] ??= null;
           if (result.info && !on) this.watch(JSON.parse(result.info.repo)[1], cx);
         }
+        this.order = (this.order ?? 0) + 1;
         this.syncHierarchy(cx);
         cx.notify();
         keys.forEach(k => this.inFlight.delete(k));
@@ -705,20 +738,30 @@ export default class Spaces extends View {
 
   menu(w) { openOverlay({mod: "menu", kind: "popup", frame: "none", width: 200, height: 260, props: {tab: "space", target: {id: w.id}}}); }
   ordered() {
-    const sp = spaces(), ps = panes();
+    const { sp, ps } = model();
+    // The rows change with the model, the git information, the shown set or the
+    // herd; every other render takes the rows it already has.
+    const rev = revisions(["spaces", "panes"]);
+    const stamp = `${rev.spaces}:${rev.panes}:${this.order ?? 0}:${this.herd().id}`;
+    if (this._rows && this._stamp === stamp) return this._rows;
     for (const w of sp) if (!this.shown.has(w.id) && (where(w, ps) in this.git || Date.now() - (this.born[w.id] ??= Date.now()) > 1500)) this.shown.add(w.id);
     const list = sp.map(w => ({w, g: this.git[where(w, ps)] ?? null}));
     // A repository is scoped by the complete machine profile and canonical common dir.
+    const repos = new Map();
+    for (const row of list) if (row.g) { const b = repos.get(row.g.repo) ?? []; b.push(row); repos.set(row.g.repo, b); }
     const out = [], emitted = new Set();
-    for (const r of list) {
-      if (!r.g) { out.push(r); continue; }
-      if (emitted.has(r.g.repo)) continue;
-      emitted.add(r.g.repo);
-      out.push(...list.filter(x => x.g?.repo === r.g.repo).sort((a,b) => Number(a.g.linked) - Number(b.g.linked)));
+    for (const row of list) {
+      if (!row.g) { out.push(row); continue; }
+      if (emitted.has(row.g.repo)) continue;
+      emitted.add(row.g.repo);
+      out.push(...(repos.get(row.g.repo) ?? []).sort((a,b) => Number(a.g.linked) - Number(b.g.linked)));
     }
     // Machine headings determine the actual sidebar and keyboard order.
     const keys = this.herd().members;
-    return keys.flatMap(k => out.filter(r => this.machineKey(r.w.machine) === k && this.shown.has(r.w.id)));
+    const byMachine = new Map(keys.map(k => [k, []]));
+    for (const row of out) { const b = byMachine.get(this.machineKey(row.w.machine)); if (b && this.shown.has(row.w.id)) b.push(row); }
+    this._stamp = stamp;
+    return (this._rows = keys.flatMap(k => byMachine.get(k)));
   }
   row(r, t, compact, machines) {
     const w = r.w, active = w.active;
@@ -830,10 +873,7 @@ export default class Spaces extends View {
     });
   }
   render(cx) {
-    const t = theme(), compact = shared("sidebar.collapsed") === true, sp = spaces(), ps = panes();
-    // One machine inventory per render: readiness and the headings read this,
-    // not a fresh host conversion for every row.
-    const inventory = machines();
+    const t = theme(), compact = shared("sidebar.collapsed") === true, { sp, ps, ms: inventory, fc: focus } = model();
     this.metrics = this.fontMetrics();
     const metricKey = JSON.stringify(this.metrics);
     if (metricKey !== this.metricKey) {
@@ -842,7 +882,7 @@ export default class Spaces extends View {
     }
     this.inventory(sp); this.remember(sp, ps);
     const h = this.herd(), scoped = sp.filter(s => h.members.includes(this.machineKey(s.machine)));
-    const current = scoped.find(s => s.id === focused()?.space);
+    const current = scoped.find(s => s.id === focus?.space);
     const selectedReady = Boolean(current && inventory.some(m => m.name === current.machine && m.layout === "ready"));
     const rows = this.ordered();
     const scope = {herd: h.id, machineKeys: h.members.map(key => this.machineName(key) ?? "@local"), spaceIds: scoped.map(s => s.id), orderedIds: rows.map(r => r.w.id), labels: Object.fromEntries(scoped.map(s => [s.id, this.label(s)])), selectedReady, empty: scoped.length === 0};

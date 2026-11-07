@@ -51,6 +51,13 @@ async function setup(documents = new Map()) {
     'gpui-base': {v_flex: el, h_flex: el},
     herdr: {
       spaces: () => world.spaces, panes: () => world.panes, machines: () => world.machines,
+      // Content fingerprints stand in for the app's change counters.
+      revisions: (keys = []) => Object.fromEntries((keys.length ? keys : ['spaces', 'panes', 'machines', 'focused']).map(k => [k, ({
+        spaces: world.spaces.length * 1000003 + JSON.stringify(world.spaces).length,
+        panes: world.panes.length * 1000003 + JSON.stringify(world.panes).length,
+        machines: world.machines.length * 1000003 + JSON.stringify(world.machines).length,
+        focused: JSON.stringify(world.focus ?? null).length,
+      })[k] ?? 0])),
       settings: () => world.settings,
       focused: () => world.focus, run: (name, args) => {
         calls.push({name, args});
