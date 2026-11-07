@@ -698,3 +698,50 @@ The Windows package SHA-256 is
 This parity update is staged separately, not installed over live sessions.
 
 
+## Sidebar model reads — 2026-11-06
+
+Typing stalled in a window holding 83 workspaces. gdb sampling of the running
+app put the main thread in `AppWindow::publish`, which rebuilds the whole model
+as JSON and compares every part with what it published before, and in
+`mods::to_host`, which deep-copies that model into the script on every read.
+Drawing is not the cost: a plain output flood costs no measurable CPU, and a
+breakpoint on `publish` records no hits per frame at rest or during a flood.
+The work is per mod render, it grows with the number of workspaces, and a
+streaming agent changes the snapshot — its pane title, its status — many times
+a second, which re-renders every mod that reads panes.
+
+The sidebar was the expensive reader. `spaces()`, `panes()`, `machines()` and
+`focused()` are host calls that each copy their whole list; `ordered()` called
+two of them, rebuilt the rows with a filter over every space for each space,
+and was called about eight times per render by the render, keyboard and menu
+paths. `place()` scanned every pane for every space.
+
+`revisions(keys)` now reports the snapshot's change counters for the keys a mod
+names; it records the dependencies the reads recorded, so no copy renders that
+did not render before. The sidebar takes the four lists once per change, asks a
+one-pass tab-to-folder index where a space is, buckets repositories and machines
+in one pass, and keeps its rows until a counter, its git information, its shown
+set or its herd moves.
+
+Measured on 91 workspaces with 8 of them churning, both binaries in the same
+fixture: mod renders 7.2/s down to 0.3/s, app renders 4.8/s down to 1.4/s, total
+CPU 13.4% of a core down to 9.3%. The renders that survive cost more each,
+because the memo defers the rebuild to the render where the model actually
+changed. Main-thread share is where it was (4.7% to 5.7%), which is the point:
+that share is the Rust `publish` path this patch does not touch.
+
+Measured with the app's own bench (`HERDR_APP_BENCH`) in a second instance on
+its own home and core session: two programs animating their tab title and
+reporting as an agent, the churn a streaming agent causes, plus N idle
+workspaces that every render walks. The 50 navigation, discovery and cleanup
+tests pass against the patched mod; the harness stands in for the counters with
+content fingerprints, so the memo is covered by them. The new folder index was
+checked against the definition it replaces over 20,000 random space and pane
+shapes: identical answers.
+
+Unmeasured: the person's own session, where git discovery across 15 machines
+and the machine documents add work this fixture does not model. Against that
+live session `herdr-app ls` round-trips in 1.0–2.0 s at rest, and the main
+thread runs at 13% while one agent works: that is what a keystroke queues
+behind. `rowan-agents` reads `agents()` five times per render and would take
+the same treatment.
