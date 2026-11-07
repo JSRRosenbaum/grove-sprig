@@ -435,3 +435,15 @@ export function nextCommand(): Promise<string>;
  * Watch what you show, not a whole home folder (node_modules is a lot of events).
  */
 export function watchFolder(path: string): Promise<string[]>;
+
+/**
+ * Change counters for the snapshot keys you name (spaces, machines, agents,
+ * panes, terminals, focused, …). Every host-side change bumps that key's
+ * revision, so a mod reads a big list once per change and polls counters in
+ * between — each read copies the whole list into the script.
+ *   let seen = { panes: 0 };
+ *   const revs = revisions(Object.keys(seen));
+ *   if (revs.panes !== seen.panes) { seen.panes = revs.panes; this.reload(); }
+ * Names that are not snapshot keys are omitted from the result.
+ */
+export function revisions(keys: string[]): Record<string, number>;
