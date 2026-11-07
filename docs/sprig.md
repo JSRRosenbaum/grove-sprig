@@ -739,9 +739,16 @@ content fingerprints, so the memo is covered by them. The new folder index was
 checked against the definition it replaces over 20,000 random space and pane
 shapes: identical answers.
 
-Unmeasured: the person's own session, where git discovery across 15 machines
-and the machine documents add work this fixture does not model. Against that
-live session `herdr-app ls` round-trips in 1.0–2.0 s at rest, and the main
-thread runs at 13% while one agent works: that is what a keystroke queues
-behind. `rowan-agents` reads `agents()` five times per render and would take
-the same treatment.
+Against the person's own live session (83 workspaces, 15 machines, one app
+instance) `herdr-app ls` round-trips in 2.22 s and the main thread runs at 11.6%
+of a core: that is what a keystroke queues behind. Git discovery across 15
+machines and the machine documents add work this fixture does not model, so the
+fixture numbers are a floor, not the live figure. `rowan-agents` reads `agents()`
+five times per render and would take the same treatment.
+
+The sidebar's gutter showed a per-screen `w` tag, so the same workspace had a
+different name on every screen and none of them was the name agents and `hc`
+use. It now shows the address of the terminal the workspace is showing (`t13`,
+`nix/t13` on a peer): the tooltip adds machine and folder, clicking the
+identifier copies the address, and `rowan-agents` reads the same addresses off
+the sidebar's published scope. The tag stays in state for the scope diagnostic.
