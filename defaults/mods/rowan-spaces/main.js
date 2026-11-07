@@ -8,13 +8,18 @@ import { spaces, machines, panes, run, openOverlay, exec, hc, readDocument, writ
 // Every read of a host list copies the whole list into the script, so the model
 // is taken once per change and handed down. `revisions` names the parts watched:
 // it costs nothing while nothing moved, and says when something did.
-let _seen = null, _model = null;
+let _seen = null, _model = null, _lastPs = null;
 function model() {
   const r = revisions(["spaces", "panes", "machines", "focused"]);
   if (_seen && r.spaces === _seen.spaces && r.panes === _seen.panes &&
       r.machines === _seen.machines && r.focused === _seen.focused) return _model;
   _seen = r;
-  return (_model = { sp: spaces(), ps: panes(), ms: machines(), fc: focused() });
+  _model = { sp: spaces(), ps: panes(), ms: machines(), fc: focused() };
+  // Cached for callers outside a render (the hierarchy poll): `revisions()`
+  // subscribes to the calling context, so anything below render() reads this
+  // cache instead of the store. Addresses are then at most one render stale.
+  _lastPs = _model.ps;
+  return _model;
 }
 
 // Where a space is now: its first terminal's live folder, else where it was made.
@@ -181,7 +186,7 @@ export default class Spaces extends View {
     if (changed) this.save();
   }
   label(s) { return this.state.labels[this.spaceKey(s)]; }
-  refOf(s) { return ref(s, model().ps); }
+  refOf(s) { return ref(s, _lastPs); }
   remember(sp, ps) {
     const f = focused(), h = this.herd();
     if (this.selecting) {
