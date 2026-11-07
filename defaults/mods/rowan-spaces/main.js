@@ -578,8 +578,16 @@ export default class Spaces extends View {
         // on one machine flap the same row at each other.
         const scanned = this.checked[key] ?? 0;
         if (scanned < (document.spaces[id]?.at ?? 0)) continue;
-        next.spaces[id] = {cwd: place(s, ps), git: info === null ? null :
-          {name: info.name, commonDir: JSON.parse(info.repo)[1], linked: info.linked}, at: scanned};
+        const entry = {cwd: place(s, ps), git: info === null ? null :
+          {name: info.name, commonDir: JSON.parse(info.repo)[1], linked: info.linked}};
+        // Publishing is idempotent: when our scan agrees with the published
+        // entry, keep the document byte-identical - re-stamping an unchanged
+        // entry every scan would notify every window and rebuild the whole
+        // sidebar for nothing. Only content changes move a stamp.
+        const was = document.spaces[id];
+        const {at: wasAt, ...wasContent} = was ?? {};
+        next.spaces[id] = JSON.stringify(wasContent) === JSON.stringify(entry) && wasAt !== undefined
+          ? was : {...entry, at: scanned};
         revisions.set(key, this.verified.get(key));
       }
       let result;

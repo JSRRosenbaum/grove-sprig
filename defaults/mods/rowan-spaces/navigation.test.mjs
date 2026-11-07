@@ -996,3 +996,41 @@ test('two windows on one machine converge on the hierarchy document without flap
   await a.refreshHierarchy(a.hierarchy.get('ash'), ctx.cx);
   assert.deepEqual(json(documentValue(world, 'sprig-sidebar')), published);
 });
+
+test('a rescan that agrees with the published entry does not rewrite the document', async () => {
+  const {mod, create, world} = await setup();
+  hierarchyWorld(mod, world, ['main']);
+  doc(world, 'herdr-app', {spaces: [{id: 'main'}]});
+  doc(world, 'sprig-sidebar', sidebar({}));
+  const ctx = hierarchyContext();
+  await syncHierarchy(mod, ctx);
+  world.exec = async (_cmd, _args, opts) => ({code: 0, stdout: `${opts.cwd}\n/project/.git\n`});
+  mod.refreshGit(new Set([JSON.stringify(['ash', '/main'])]), ctx.cx);
+  await ctx.drain();
+  await syncHierarchy(mod, ctx);
+  const published = json(documentValue(world, 'sprig-sidebar'));
+  const ver = () => world.documents.get(world.docKey('sprig-sidebar', 'ash')).version;
+  assert.equal(ver(), 2, 'first publish bumps the document once');
+
+  // The periodic fallback scan: the verified key is re-marked, the scan re-runs,
+  // the content is identical. Re-stamping `at` made every scan cycle a document
+  // write, notifying every window and visibly rebuilding the whole sidebar.
+  world.now += 5000;
+  for (const s of mod.verified.keys()) mod.verified.set(s, 777);
+  mod.refreshGit(new Set([JSON.stringify(['ash', '/main'])]), ctx.cx);
+  await ctx.drain();
+  await syncHierarchy(mod, ctx);
+  assert.equal(world.documents.get(world.docKey('sprig-sidebar', 'ash')).version, 2);
+  const after = json(documentValue(world, 'sprig-sidebar'));
+  assert.deepEqual(after, published, 'an unchanged scan must not touch the document');
+
+  // A real change still publishes, stamped with the new scan time.
+  world.exec = async (_cmd, _args, opts) => ({code: 0, stdout: `${opts.cwd}\n/other/.git\n`});
+  world.now += 1000;
+  mod.refreshGit(new Set([JSON.stringify(['ash', '/main'])]), ctx.cx);
+  await ctx.drain();
+  await syncHierarchy(mod, ctx);
+  const moved = json(documentValue(world, 'sprig-sidebar'));
+  assert.equal(moved.spaces.main.git.commonDir, '/other/.git');
+  assert.equal(moved.spaces.main.at, world.now);
+});
