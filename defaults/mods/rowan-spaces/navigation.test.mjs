@@ -7,6 +7,13 @@ import {readFile} from 'node:fs/promises';
 async function setup(documents = new Map()) {
   const saved = new Map(), calls = [], values = new Map();
   const world = {spaces: [], panes: [], machines: [{name: null, layout: 'ready'}], focus: null, settings: {font_size: 15, zoom: 1}, keys: [], layout: 'rowan-terminal', applyMoves: true, ackMoves: true, hc: async () => ({code: 0, stdout: '{"machines":[]}'})};
+  // Deterministic clock: the mod's scan stamps (entry `at`) and slot cooldowns
+  // read Date.now(); tests move world.now when they need time to pass.
+  world.now = Date.now();
+  class FakeDate extends Date {
+    constructor() { super(world.now); }
+    static now() { return world.now; }
+  }
   const copy = value => value == null ? value : JSON.parse(JSON.stringify(value));
   const docKey = (name, on) => JSON.stringify([on ?? null, name]);
   world.documents = documents;
@@ -45,7 +52,7 @@ async function setup(documents = new Map()) {
     }});
     return proxy;
   }
-  const context = vm.createContext({localStorage, console, Date, JSON, Set, Map, Object, Array, Math, Number, String, RegExp, encodeURIComponent, decodeURIComponent});
+  const context = vm.createContext({localStorage, console, Date: FakeDate, JSON, Set, Map, Object, Array, Math, Number, String, RegExp, encodeURIComponent, decodeURIComponent});
   const modules = {
     'gpui-kit': {View: class {}, div: el, svg: el},
     'gpui-base': {v_flex: el, h_flex: el},
@@ -732,8 +739,8 @@ test('rebuilt machine retry persists successful removal and never repairs ordina
 });
 
 // A core owns both documents; profile names are routes, not document keys.
-const sidebarEntry = (cwd, commonDir = '/project/.git', linked = false) =>
-  ({cwd, git: {name: 'project', commonDir, linked}});
+const sidebarEntry = (cwd, commonDir = '/project/.git', linked = false, at) =>
+  ({cwd, git: {name: 'project', commonDir, linked}, ...(at === undefined ? {} : {at})});
 const sidebar = spaces => ({schema: 1, spaces});
 const doc = (world, name, value, on = 'ash', version = 1) =>
   world.documents.set(world.docKey(name, on), {value, version});
@@ -819,7 +826,7 @@ test('a conflicting concurrent workspace update is merged instead of overwritten
   await syncHierarchy(mod, ctx);
   assert.equal(conflicted, true);
   assert.deepEqual(json(documentValue(world, 'sprig-sidebar')), sidebar({
-    main: sidebarEntry('/main', '/project/.git', true),
+    main: sidebarEntry('/main', '/project/.git', true, world.now),
     linked: sidebarEntry('/linked', '/project/.git', true),
   }));
 });
@@ -955,4 +962,37 @@ test('a restored non-repository is revalidated after becoming a repository while
   await ctx.drain();
   assert.equal(groups(mod)['ash/main'].repo, JSON.stringify(['ash', '/project/.git']));
   assert.equal(documentValue(world, 'sprig-sidebar').spaces.main.git.commonDir, '/project/.git');
+});
+
+test('two windows on one machine converge on the hierarchy document without flapping', async () => {
+  const {mod: a, create, world} = await setup();
+  hierarchyWorld(a, world, ['main']);
+  doc(world, 'herdr-app', {spaces: [{id: 'main'}]});
+  doc(world, 'sprig-sidebar', sidebar({}));
+  const ctx = hierarchyContext();
+  await syncHierarchy(a, ctx);
+  world.exec = async (_cmd, _args, opts) => ({code: 0, stdout: `${opts.cwd}\n/project/.git\n`});
+  // Window A scans at t=1000 and publishes.
+  a.refreshGit(new Set([JSON.stringify(['ash', '/main'])]), ctx.cx);
+  await ctx.drain();
+  await syncHierarchy(a, ctx);
+  const published = json(documentValue(world, 'sprig-sidebar'));
+  assert.equal(published.spaces.main.at, world.now);
+
+  // Window B adopts the entry and must not restamp it as a fresh local scan:
+  // restamping made B overwrite A's data, and A write its stale scan back.
+  const b = create();
+  hierarchyWorld(b, world, ['main']);
+  b.restoreHierarchy({on: 'ash', identity: b.machineKey('ash')}, published, ctx.cx);
+  assert.equal(b.checked[JSON.stringify(['ash', '/main'])], world.now);
+  await syncHierarchy(b, ctx);
+  assert.deepEqual(json(documentValue(world, 'sprig-sidebar')), published);
+
+  // A stale scan must never clobber a newer published one: age A's stamp,
+  // re-fire the refresh, and the document stays byte-identical.
+  a.checked[JSON.stringify(['ash', '/main'])] = world.now - 1500;
+  world.now += 1000;
+  for (const s of a.verified.keys()) a.verified.set(s, 999);
+  await a.refreshHierarchy(a.hierarchy.get('ash'), ctx.cx);
+  assert.deepEqual(json(documentValue(world, 'sprig-sidebar')), published);
 });

@@ -541,7 +541,7 @@ export default class Spaces extends View {
       if (g !== null && (!g || typeof g.name !== "string" || typeof g.commonDir !== "string" || typeof g.linked !== "boolean")) continue;
       const info = g === null ? null : {name: g.name, repo: JSON.stringify([slot.on, g.commonDir]), linked: g.linked};
       if (!(key in this.git) || JSON.stringify(this.git[key]) !== JSON.stringify(info)) {
-        this.git[key] = info; this.checked[key] = Date.now();
+        this.git[key] = info; this.checked[key] = entry.at ?? Date.now();
         this.order = (this.order ?? 0) + 1;
         if (info === null) this.unsure.add(key);
       }
@@ -573,8 +573,13 @@ export default class Spaces extends View {
         if (!live.has(id) || !this.verified.has(key) || this.gitMachine[key] !== slot.identity || this.unsure.has(key)) continue;
         const info = this.git[key];
         if (info === undefined) continue;
+        // Fresher-wins: a scan from another window that is newer than ours
+        // owns the entry. Writing a stale scan back is what made two windows
+        // on one machine flap the same row at each other.
+        const scanned = this.checked[key] ?? 0;
+        if (scanned < (document.spaces[id]?.at ?? 0)) continue;
         next.spaces[id] = {cwd: place(s, ps), git: info === null ? null :
-          {name: info.name, commonDir: JSON.parse(info.repo)[1], linked: info.linked}};
+          {name: info.name, commonDir: JSON.parse(info.repo)[1], linked: info.linked}, at: scanned};
         revisions.set(key, this.verified.get(key));
       }
       let result;
