@@ -281,7 +281,12 @@ export default class Agents extends View {
         .when(Boolean(l), el => el.border_l(1.5).border_color(t.input))
         .when(l === "└" || l === "├", el => el.border_b(1.5).rounded_bl(6))))
       .when(Boolean(pic), el => el.child(div().mr(8).child(pic)))
-      .child(div().flex_1().truncate().text_color(on ? t.foreground : t.muted).child(k.name || k.template || k.program?.name || k.address))
+      .child(div().flex_1().truncate().text_color(on ? t.foreground : t.muted).child(
+        // Same rule as the lead rows: the heading carries the hostname, so
+        // an id of the form `nix/t13` shows as `t13`.
+        k.address?.includes("/") && (k.name || "").startsWith(`${k.address.split("/")[0]}/`)
+          ? k.name.slice(k.address.split("/")[0].length + 1)
+          : k.name || k.template || k.program?.name || k.address))
       .child(this.status(t, { status: st }, compact));
   }
 
@@ -378,7 +383,12 @@ export default class Agents extends View {
     const label = (a) => {
       const tab = tabs.find(tab => tab.id === a.tab);
       const live = metadata(all.find(k => k.address === a.address), now);
-      return (typeof live?.title === "string" && live.title) || (tab ? title(tab, lead(tab)) : a.title || a.program?.name || "");
+      const raw = (typeof live?.title === "string" && live.title) || (tab ? title(tab, lead(tab)) : a.title || a.program?.name || "");
+      // The machine heading above the rows carries the hostname; an id like
+      // `nix/tb88425372e98f4f` never fits the row, and the prefix hides the
+      // part that matters. Show the id alone.
+      const machine = a.address.includes("/") ? a.address.split("/")[0] : null;
+      return machine && raw.startsWith(`${machine}/`) ? a.address.split("/").pop() : raw;
     };
     const detail = new Map(list.map(a => [a.address, /^\d+$/.test(label(a)) ? null : label(a)]));
     const seen = {};

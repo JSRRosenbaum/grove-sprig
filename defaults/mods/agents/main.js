@@ -285,7 +285,13 @@ export default class Agents extends View {
     // Read the pane snapshot once: every host read copies the whole list into JS.
     const leads = leadPanes(panes());
     const tabLabels = new Map(spaces().flatMap(s => s.tabs).map(tab => [tab.id, title(tab, leads.get(tab.id))]));
-    const labels = new Map(list.map(a => [a.address, tabLabels.get(a.tab) ?? (a.title || a.program?.name || "")]));
+    const labels = new Map(list.map(a => {
+      const raw = tabLabels.get(a.tab) ?? (a.title || a.program?.name || "");
+      // Under a machine's heading the hostname goes without saying; an id
+      // like `nix/tb88425372e98f4f` shows as the terminal's own id.
+      const machine = a.address.includes("/") ? a.address.split("/")[0] : null;
+      return [a.address, machine && raw.startsWith(`${machine}/`) ? a.address.split("/").pop() : raw];
+    }));
     const label = (a) => labels.get(a.address);
     const detail = new Map(list.map(a => [a.address, /^\d+$/.test(label(a)) ? null : label(a)]));
     const seen = {};
