@@ -187,6 +187,15 @@ export default class Spaces extends View {
   }
   label(s) { return this.state.labels[this.spaceKey(s)]; }
   refOf(s) { return ref(s, _lastPs); }
+  // The row's right column: the machine heading above already says where, and
+  // `nix/t13` in a fixed-width column truncates to `nix/t…` — the id, the only
+  // part that tells rows apart, never shows. So show the id alone.
+  idOf(s) {
+    const at = this.refOf(s);
+    if (!at) return "";
+    const i = at.lastIndexOf("/");
+    return i >= 0 ? at.slice(i + 1) : at;
+  }
   remember(sp, ps) {
     const f = focused(), h = this.herd();
     if (this.selecting) {
@@ -838,7 +847,7 @@ export default class Spaces extends View {
         .child(ready ? glyph(status) : "·"))
       .tooltip(`${ref(w, model().ps) ?? "no terminal"} · ${this.machineName(this.machineKey(w.machine)) ?? "this computer"}` +
         (w.folder ? ` · ${w.folder}` : ""));
-    if (compact) return line.child(div().min_w(0).truncate().text_color(t.muted).child(this.refOf(w) || "…"));
+    if (compact) return line.child(div().min_w(0).truncate().text_color(t.muted).child(this.idOf(w) || "…"));
     return line
       .child(div().flex_1().min_w(0).truncate().text_color(t.foreground)
         .when(active, e => e.font_semibold()).child(w.name))
@@ -854,7 +863,7 @@ export default class Spaces extends View {
         .tooltip(this.refOf(w) ? `Copy its address (hc get ${this.refOf(w)})` : "This workspace has no terminal yet")
         .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
         .on_click((_e, cx) => { cx.stop_propagation(); const at = this.refOf(w); if (at) cx.write_to_clipboard(at); })
-        .child(this.refOf(w) || "…"));
+        .child(this.idOf(w) || "…"));
   }
   grouped(t, compact, rows, machines) {
     const h = this.herd();
