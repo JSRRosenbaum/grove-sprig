@@ -19,9 +19,9 @@
   },
   "core": {
     "upstream": "https://github.com/herdrdev/herdr-core",
-    "revision": "421c5ab41857f8b4a5f155c42f763008f455b33d",
-    "source_version": "0.1.17",
-    "includes_unreleased": true,
+    "revision": "de97ea5ba5d6877a5e082316b4a1a5b4918e861f",
+    "source_version": "0.1.20",
+    "includes_unreleased": false,
     "ghostty_revision": "1e5cdb865807abc990181efb8ebfa9122955cce2",
     "sprig_patches": [
       {
