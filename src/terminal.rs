@@ -2595,7 +2595,7 @@ mod tests {
     #[gpui::test]
     fn attach_errors_do_not_announce_a_terminal_exit(cx: &mut gpui::TestAppContext) {
         use gpui::*;
-        let view = cx.new(|cx| super::TerminalView::attach(crate::hc::offline(), "remote/t1".into(), (40, 5), cx));
+        let view = cx.new(|cx| super::TerminalView::attach(crate::hc::offline(), "remote/t1".into(), (40, 5), false, cx));
         let ends = cx.new(|cx| {
             cx.subscribe(&view, |count: &mut usize, _, event: &super::TerminalEvent, _| {
                 if matches!(event, super::TerminalEvent::Ended) {
@@ -2625,7 +2625,7 @@ mod tests {
     fn terminal_attaches_only_after_its_first_fit(cx: &mut gpui::TestAppContext) {
         use gpui::*;
 
-        let terminal = cx.new(|cx| super::TerminalView::attach(crate::hc::offline(), "t1".into(), (120, 40), cx));
+        let terminal = cx.new(|cx| super::TerminalView::attach(crate::hc::offline(), "t1".into(), (120, 40), false, cx));
         cx.run_until_parked();
         terminal.read_with(cx, |terminal, _| assert!(!terminal.lost, "must not contact the core before layout"));
         terminal.update(cx, |terminal, _| terminal.fit(114, 30, size(px(8.), px(18.)), 1.));
@@ -2640,7 +2640,7 @@ mod tests {
     fn an_unpainted_terminal_attaches_at_its_creation_deadline(cx: &mut gpui::TestAppContext) {
         use gpui::*;
 
-        let terminal = cx.new(|cx| super::TerminalView::attach(crate::hc::offline(), "t1".into(), (120, 40), cx));
+        let terminal = cx.new(|cx| super::TerminalView::attach(crate::hc::offline(), "t1".into(), (120, 40), false, cx));
         cx.run_until_parked();
         cx.executor().advance_clock(std::time::Duration::from_millis(99));
         cx.run_until_parked();
@@ -2657,7 +2657,7 @@ mod tests {
     fn terminal_discards_replay_for_an_outdated_pane_size(cx: &mut gpui::TestAppContext) {
         use gpui::*;
 
-        let terminal = cx.new(|cx| super::TerminalView::attach(crate::hc::offline(), "t1".into(), (120, 40), cx));
+        let terminal = cx.new(|cx| super::TerminalView::attach(crate::hc::offline(), "t1".into(), (120, 40), false, cx));
         let (tx, rx) = async_channel::unbounded();
         terminal.update(cx, |terminal, cx| {
             terminal.fit(114, 30, size(px(8.), px(18.)), 1.);
