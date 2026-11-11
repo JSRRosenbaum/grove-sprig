@@ -13,7 +13,7 @@ fn unpainted_hidden_pane(cx: &mut gpui::TestAppContext) {
         this.model = crate::model::Model::default();
         let mut tab = super::Tab::new("tab", "", "a", "probe-a");
         tab.root.split("a", super::Axis::Row, crate::model::pane("b", "probe-b"), "split".into());
-        this.model.add_space("space", "test", "/", tab);
+        this.model.add_space("space", "test", "/", tab, true);
         this.sync(window, cx);
         assert!(!this.terms["b"].view.read(cx).lost);
         this.model.tab_mut("tab").unwrap().zoomed = Some("a".into());
@@ -39,7 +39,7 @@ fn covered_pane_deadline(cx: &mut gpui::TestAppContext) {
     view.update_in(cx, |this, window, cx| {
         this.folders.retain(|id, _| id == "size-probe");
         this.model = crate::model::Model::default();
-        this.model.add_space("space", "test", "/", super::Tab::new("tab", "", "a", "probe-a"));
+        this.model.add_space("space", "test", "/", super::Tab::new("tab", "", "a", "probe-a"), true);
         this.sync(window, cx);
         this.live.insert("replacement".into(), serde_json::json!({"state": "live"}));
         this.swapped.insert("a".into(), "replacement".into());
@@ -65,7 +65,7 @@ fn agent_only_first_fit(cx: &mut gpui::TestAppContext) {
     view.update_in(cx, |this, window, cx| {
         this.folders.retain(|id, _| id == "size-probe");
         this.model = crate::model::Model::default();
-        this.model.add_space("space", "test", "/", super::Tab::new("tab", "", "a", "probe-a"));
+        this.model.add_space("space", "test", "/", super::Tab::new("tab", "", "a", "probe-a"), true);
         this.live.insert("probe-a".into(), serde_json::json!({"state": "live"}));
         this.agent = Some("probe-a".into());
         this.sync(window, cx);

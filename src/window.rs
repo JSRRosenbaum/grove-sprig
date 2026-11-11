@@ -6202,7 +6202,7 @@ export default class Child extends View {
             "id": "root", "type": "block", "content": { "tab": "active" }
         }));
         cx.update(|window, cx| view.update(cx, |this, cx| {
-            this.model.add_space("sp1", "", "/tmp", crate::model::Tab::new("tb1", "", "p1", "t1"));
+            this.model.add_space("sp1", "", "/tmp", crate::model::Tab::new("tb1", "", "p1", "t1"), true);
             this.sync(window, cx);
             this.open_overlay("bottom".into(), json!({"kind": "dialog"}), window, cx);
             for kind in ["dialog", "popup"] {
@@ -6585,7 +6585,7 @@ export default class SystemToast extends View {
     fn swap_model() -> super::Model {
         use crate::layout::Axis;
         let mut m = super::Model::default();
-        m.add_space("s1", "api", "/src", super::Tab::new("c1", "", "x1", "t1"));
+        m.add_space("s1", "api", "/src", super::Tab::new("c1", "", "x1", "t1"), true);
         m.split("x1", Axis::Row, "x2", "t2");
         m.add_tab("s1", super::Tab::new("c2", "", "x3", "t3"));
         m.select_tab("c1");

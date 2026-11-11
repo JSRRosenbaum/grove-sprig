@@ -69,7 +69,7 @@ export default class NewMenu extends View {
       .child(v_flex().flex_1().min_h(0).overflow_y_scrollbar()
         .children(choices.map((a, i) => this.row(a.key, a.tint ? svg(a.icon).size(14).text_color(t.foreground) : image(a.icon).size(14), a.name,
           () => run("tab.new", { name: a.name, space: space?.id, argv: a.run }), a.installed ? (i < 9 ? String(i + 1) : "") : "not installed", a.installed)))
-        .when(this.failed || this.agents.length === 0, el => el.child(div().px(14).py(6).text_color(t.dim).child(this.failed ? "Could not load agents" : "Checking installed agents…"))))
+        .when(this.failed || this.agents.length === 0, el => el.child(div().px(14).py(6).text_color(t.dim).child(this.failed ? "Could not check installed agents" : "Checking installed agents…"))))
       .child(div().h(1).bg(t.border))
       .child(this.row("space", div().w(14).child("+"), "New space", () => run("space.new"), shortcut("space.new")))
       .child(this.row("worktree", svg("mods/workspace-chrome/branch.svg").size(14), "New worktree…", () => window()?.layout_name === "rowan-terminal" ? run("rowan-spaces.worktree-new") : openOverlay({ mod: "worktree", kind: "dialog", frame: "none", width: 460, height: 280, props: { space: space?.id, folder: panes().find(p => p.focused)?.cwd, action: "new" } }), "", Boolean(space)))
