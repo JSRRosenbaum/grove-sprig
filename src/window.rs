@@ -2215,6 +2215,27 @@ impl AppWindow {
             changed |= self.model.set_turn(addr, turn, label.max(self.written_seen.get(addr).copied()));
         }
         self.written_seen.retain(|a, _| self.live.contains_key(a));
+        if listed {
+            // An address a complete listing no longer has, on a machine that is
+            // connected, is gone: a migration renumbered that terminal, so its busy
+            // mark and its pane follow it. Absence on a machine that is not
+            // connected proves nothing, so that machine keeps its marks.
+            let gone = self.gone_agents();
+            if !gone.is_empty() {
+                self.model.agents.retain(|a, _| !gone.contains(a));
+                let dead: Vec<String> = self
+                    .chrome
+                    .terminals()
+                    .into_iter()
+                    .filter(|n| n.terminal().is_some_and(|t| gone.iter().any(|g| g == t)))
+                    .map(|n| n.id.clone())
+                    .collect();
+                for pane in dead {
+                    self.chrome.remove_slot(&pane);
+                    changed = true;
+                }
+            }
+        }
         changed |= self.share_seen(cx);
         // Changes already made before Herdr started aren't news.
         if self.listed_once {
@@ -2235,6 +2256,21 @@ impl AppWindow {
         } else if listed {
             self.publish(cx);
         }
+    }
+
+    /// Addresses this window remembers that a complete listing no longer has,
+    /// limited to the machines connected right now.
+    fn gone_agents(&self) -> Vec<String> {
+        self.model
+            .agents
+            .keys()
+            .filter(|a| !self.live.contains_key(*a))
+            .filter(|a| match a.split_once('/') {
+                Some((m, _)) => self.documents.get(m).is_some_and(|s| s.connected),
+                None => true,
+            })
+            .cloned()
+            .collect()
     }
 
     /// Tells the person an agent needs them or finished: Herdr's sounds, and a
@@ -6144,6 +6180,42 @@ export default class Child extends View {
                 assert_eq!(&this.chrome, expected);
                 assert_eq!(&saved(this), expected);
             }
+        }));
+    }
+
+    #[test]
+    fn a_terminal_a_connected_listing_lost_is_pruned() {
+        in_own_process("listing_prunes_gone_terminals");
+    }
+
+    #[gpui::test]
+    fn listing_prunes_gone_terminals(cx: &mut gpui::TestAppContext) {
+        use serde_json::json;
+        if !running_alone("listing_prunes_gone_terminals") {
+            return;
+        }
+        let (view, cx) = open_window(cx, "neighbor", "", json!({
+            "id": "root", "type": "row", "children": [
+                { "id": "left", "type": "column", "children": [
+                    { "id": "terminal", "type": "block", "content": { "terminal": "t1" } },
+                    { "id": "kept", "type": "block", "content": { "terminal": "other/t1" } }
+                ] },
+                { "id": "right", "type": "column", "children": [
+                    { "id": "neighbor", "type": "block", "content": { "mod": "neighbor" } }
+                ] }
+            ]
+        }));
+        cx.update(|window, cx| view.update(cx, |this, cx| {
+            this.model.set_word("t1", Some("working".into()), None, false);
+            this.model.set_word("other/t1", Some("working".into()), None, false);
+            this.listed_once = true;
+            // A complete listing that no longer has `t1` here. `other` is not a
+            // connected machine, so absence there is not evidence.
+            this.terminals_listed(json!({"terminals": []}), window, cx);
+            assert!(!this.model.agents.contains_key("t1"), "a lost terminal loses its mark");
+            assert!(this.chrome.find("terminal").is_none(), "its empty pane goes with it");
+            assert!(this.chrome.find("kept").is_some(), "a disconnected machine keeps its pane");
+            assert!(this.model.agents.contains_key("other/t1"), "and its mark");
         }));
     }
 
