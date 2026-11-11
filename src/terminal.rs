@@ -162,8 +162,6 @@ pub struct TerminalView {
     copy_mode: Option<CopyMode>,
     copy_search_task: Option<Task<()>>,
     copy_search_running: bool,
-    /// A potentially visible pane waits for measured canvas geometry before attach.
-    pub(crate) waiting_for_layout: bool,
     _reader: Option<Task<()>>,
 }
 
@@ -267,11 +265,11 @@ fn track_mouse_button(buttons: &mut Vec<MouseButton>, action: GhosttyMouseAction
 }
 
 impl TerminalView {
-    /// Attach after first layout: visible panes have their actual cell geometry,
-    /// while hidden panes retain the source size hint.
-    /// Otherwise an old-size snapshot can arrive after prepaint resized the VT.
-    /// The wait is bounded, so an unpainted view still attaches.
-    pub fn attach(core: Arc<Core>, address: String, size_hint: (u16, u16), wait_for_layout: bool, cx: &mut Context<Self>) -> Self {
+    /// Waits for pane layout before replay, bounded so an unpainted view still
+    /// attaches: a visible pane gets its measured cell geometry from the canvas
+    /// `fit` signal, while a pane that is never painted (hidden, covered, zoomed
+    /// away) attaches at the source size hint once the bound expires.
+    pub fn attach(core: Arc<Core>, address: String, size_hint: (u16, u16), cx: &mut Context<Self>) -> Self {
         let attach_deadline = cx.background_executor().now() + Duration::from_millis(100);
         let mut view = TerminalView {
             address: address.clone(),
@@ -325,20 +323,10 @@ impl TerminalView {
             copy_mode: None,
             copy_search_task: None,
             copy_search_running: false,
-            waiting_for_layout: true,
             _reader: None,
         };
-        if !wait_for_layout { view.attach_pending(cx); }
+        view.connect(core, cx);
         view
-    }
-
-    /// Hidden panes can attach at the source hint; visible panes call this only
-    /// from canvas prepaint, after their real columns, rows and cell are known.
-    pub fn attach_pending(&mut self, cx: &mut Context<Self>) {
-        if !self.waiting_for_layout { return; }
-        self.waiting_for_layout = false;
-        let core = self.grid.borrow().core.clone();
-        self.connect(core, cx);
     }
 
     /// Attaches to the same terminal on a (new) core connection.
@@ -348,8 +336,7 @@ impl TerminalView {
         }
         self.ended = None;
         self.lost = false;
-        if self.waiting_for_layout { self.grid.borrow_mut().core = core; }
-        else { self.connect(core, cx); }
+        self.connect(core, cx);
         cx.notify();
     }
 
@@ -2234,7 +2221,6 @@ impl Render for TerminalView {
         let grid_paint = self.grid.clone();
         let selection_view = cx.entity().downgrade();
         let resize_view = cx.entity().downgrade();
-        let pending_attach = self.waiting_for_layout;
         let (input_focus, input_view) = (self.focus.clone(), cx.entity());
         let ended = self.ended.clone().or_else(|| self.lost.then(|| "reconnecting to core…".to_owned()));
         let search_input = self.search_open.then(|| self.search_input.clone()).flatten();
@@ -2373,11 +2359,8 @@ impl Render for TerminalView {
                             (cols, rows) != (g.vt.cols, g.vt.rows)
                         };
                         grid.borrow_mut().fit(cols, rows, cell, window.scale_factor());
-                        if geometry_changed || pending_attach {
-                            let _ = resize_view.update(cx, |this, cx| {
-                                if geometry_changed { this.invalidate_copy_mode(cx); }
-                                this.attach_pending(cx);
-                            });
+                        if geometry_changed {
+                            let _ = resize_view.update(cx, |this, cx| this.invalidate_copy_mode(cx));
                         }
                     },
                     move |bounds, _, window, cx| {
@@ -2595,7 +2578,7 @@ mod tests {
     #[gpui::test]
     fn attach_errors_do_not_announce_a_terminal_exit(cx: &mut gpui::TestAppContext) {
         use gpui::*;
-        let view = cx.new(|cx| super::TerminalView::attach(crate::hc::offline(), "remote/t1".into(), (40, 5), false, cx));
+        let view = cx.new(|cx| super::TerminalView::attach(crate::hc::offline(), "remote/t1".into(), (40, 5), cx));
         let ends = cx.new(|cx| {
             cx.subscribe(&view, |count: &mut usize, _, event: &super::TerminalEvent, _| {
                 if matches!(event, super::TerminalEvent::Ended) {
@@ -2625,7 +2608,7 @@ mod tests {
     fn terminal_attaches_only_after_its_first_fit(cx: &mut gpui::TestAppContext) {
         use gpui::*;
 
-        let terminal = cx.new(|cx| super::TerminalView::attach(crate::hc::offline(), "t1".into(), (120, 40), false, cx));
+        let terminal = cx.new(|cx| super::TerminalView::attach(crate::hc::offline(), "t1".into(), (120, 40), cx));
         cx.run_until_parked();
         terminal.read_with(cx, |terminal, _| assert!(!terminal.lost, "must not contact the core before layout"));
         terminal.update(cx, |terminal, _| terminal.fit(114, 30, size(px(8.), px(18.)), 1.));
@@ -2640,7 +2623,7 @@ mod tests {
     fn an_unpainted_terminal_attaches_at_its_creation_deadline(cx: &mut gpui::TestAppContext) {
         use gpui::*;
 
-        let terminal = cx.new(|cx| super::TerminalView::attach(crate::hc::offline(), "t1".into(), (120, 40), false, cx));
+        let terminal = cx.new(|cx| super::TerminalView::attach(crate::hc::offline(), "t1".into(), (120, 40), cx));
         cx.run_until_parked();
         cx.executor().advance_clock(std::time::Duration::from_millis(99));
         cx.run_until_parked();
@@ -2657,7 +2640,7 @@ mod tests {
     fn terminal_discards_replay_for_an_outdated_pane_size(cx: &mut gpui::TestAppContext) {
         use gpui::*;
 
-        let terminal = cx.new(|cx| super::TerminalView::attach(crate::hc::offline(), "t1".into(), (120, 40), false, cx));
+        let terminal = cx.new(|cx| super::TerminalView::attach(crate::hc::offline(), "t1".into(), (120, 40), cx));
         let (tx, rx) = async_channel::unbounded();
         terminal.update(cx, |terminal, cx| {
             terminal.fit(114, 30, size(px(8.), px(18.)), 1.);
@@ -2690,7 +2673,7 @@ mod tests {
         }
         cx.update(gpui_base::init);
         let (root, cx) = cx.add_window_view(|_, cx| Root {
-            terminal: cx.new(|cx| super::TerminalView::attach(crate::hc::offline(), "t1".into(), (40, 5), false, cx)),
+            terminal: cx.new(|cx| super::TerminalView::attach(crate::hc::offline(), "t1".into(), (40, 5), cx)),
             text: cx.new(|cx| TextViewState::markdown("Move the pointer over this selectable text.", cx)),
         });
         cx.run_until_parked();
@@ -2734,12 +2717,12 @@ mod tests {
         cx.update(gpui_base::init);
         let (root, cx) = cx.add_window_view(|_, cx| Root {
             first: cx.new(|cx| {
-                let terminal = super::TerminalView::attach(crate::hc::offline(), "t1".into(), (32, 6), false, cx);
+                let terminal = super::TerminalView::attach(crate::hc::offline(), "t1".into(), (32, 6), cx);
                 terminal.grid.borrow_mut().vt.write(b"alpha result");
                 terminal
             }),
             second: cx.new(|cx| {
-                let terminal = super::TerminalView::attach(crate::hc::offline(), "t2".into(), (32, 6), false, cx);
+                let terminal = super::TerminalView::attach(crate::hc::offline(), "t2".into(), (32, 6), cx);
                 terminal.grid.borrow_mut().vt.write(b"beta result");
                 terminal
             }),
@@ -2791,7 +2774,7 @@ mod tests {
 
         cx.update(gpui_base::init);
         let (root, cx) = cx.add_window_view(|_, cx| Root(cx.new(|cx| {
-            let terminal = super::TerminalView::attach(crate::hc::offline(), "t1".into(), (40, 6), false, cx);
+            let terminal = super::TerminalView::attach(crate::hc::offline(), "t1".into(), (40, 6), cx);
             terminal.grid.borrow_mut().vt.write(b"needle appears here");
             terminal
         })));
@@ -2823,7 +2806,7 @@ mod tests {
         use gpui::*;
 
         cx.update(gpui_base::init);
-        let terminal = cx.new(|cx| super::TerminalView::attach(crate::hc::offline(), "t1".into(), (40, 6), false, cx));
+        let terminal = cx.new(|cx| super::TerminalView::attach(crate::hc::offline(), "t1".into(), (40, 6), cx));
         let (_, cx) = cx.add_window_view(|_, _| gpui::Empty);
         cx.update(|window, app| terminal.update(app, |terminal, cx| {
             terminal.open_search(window, cx);
@@ -2870,7 +2853,7 @@ mod tests {
         let bindings = crate::keys::parse(crate::keys::DEFAULTS).expect("shipped keys parse");
         cx.update(|app| crate::keys::install(bindings, app));
         let (root, cx) = cx.add_window_view(|_, cx| {
-            Root(cx.new(|cx| super::TerminalView::attach(crate::hc::offline(), "t1".into(), (40, 6), false, cx)))
+            Root(cx.new(|cx| super::TerminalView::attach(crate::hc::offline(), "t1".into(), (40, 6), cx)))
         });
         cx.run_until_parked();
         let aliases: &[(&str, &str)] = if cfg!(target_os = "macos") {
@@ -2915,7 +2898,7 @@ mod tests {
 
         cx.update(gpui_base::init);
         let (root, cx) = cx.add_window_view(|_, cx| Root(cx.new(|cx| {
-            let terminal = super::TerminalView::attach(crate::hc::offline(), "t1".into(), (40, 6), false, cx);
+            let terminal = super::TerminalView::attach(crate::hc::offline(), "t1".into(), (40, 6), cx);
             terminal.grid.borrow_mut().vt.write(b"needle appears here");
             terminal
         })));
@@ -2968,7 +2951,7 @@ mod tests {
 
         cx.update(gpui_base::init);
         let (root, cx) = cx.add_window_view(|_, cx| Root(cx.new(|cx| {
-            let terminal = super::TerminalView::attach(crate::hc::offline(), "t1".into(), (40, 5), false, cx);
+            let terminal = super::TerminalView::attach(crate::hc::offline(), "t1".into(), (40, 5), cx);
             terminal.grid.borrow_mut().vt.write(b"old alpha\r\nbetween\r\nnew alpha");
             terminal
         })));
@@ -3021,7 +3004,7 @@ mod tests {
 
         cx.update(gpui_base::init);
         let (root, cx) = cx.add_window_view(|_, cx| Root(cx.new(|cx| {
-            super::TerminalView::attach(crate::hc::offline(), "t1".into(), (40, 6), false, cx)
+            super::TerminalView::attach(crate::hc::offline(), "t1".into(), (40, 6), cx)
         })));
         cx.run_until_parked();
 
@@ -3071,7 +3054,7 @@ mod tests {
 
         cx.update(gpui_base::init);
         let (root, cx) = cx.add_window_view(|_, cx| Root(cx.new(|cx| {
-            super::TerminalView::attach(crate::hc::offline(), "t1".into(), (40, 6), false, cx)
+            super::TerminalView::attach(crate::hc::offline(), "t1".into(), (40, 6), cx)
         })));
         cx.run_until_parked();
 
@@ -3140,7 +3123,7 @@ mod tests {
         let bindings = crate::keys::parse(crate::keys::DEFAULTS).expect("shipped keys parse");
         cx.update(|app| crate::keys::install(bindings, app));
         let (root, cx) = cx.add_window_view(|_, cx| {
-            Root(cx.new(|cx| super::TerminalView::attach(crate::hc::offline(), "t1".into(), (40, 6), false, cx)))
+            Root(cx.new(|cx| super::TerminalView::attach(crate::hc::offline(), "t1".into(), (40, 6), cx)))
         });
         cx.run_until_parked();
         cx.update(|window, app| {
@@ -3525,7 +3508,7 @@ mod tests {
         }
         cx.update(gpui_base::init);
         let (root, cx) = cx.add_window_view(|_, cx| {
-            Root(cx.new(|cx| super::TerminalView::attach(crate::hc::offline(), "t1".into(), (40, 5), false, cx)))
+            Root(cx.new(|cx| super::TerminalView::attach(crate::hc::offline(), "t1".into(), (40, 5), cx)))
         });
         cx.run_until_parked();
         let terminal = root.read_with(cx, |root, _| root.0.clone());
