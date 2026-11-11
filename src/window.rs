@@ -1549,7 +1549,7 @@ impl AppWindow {
         }
         let want_terms: HashSet<String> = terms.iter().map(|(id, _)| id.clone()).collect();
         for (id, address) in terms.into_iter() {
-            if let Some(t) = self.terms.get(&id).filter(|t| t.address == address) {
+            if self.terms.get(&id).is_some_and(|t| t.address == address) {
                 continue;
             }
             let rec = self.live.get(&address);
