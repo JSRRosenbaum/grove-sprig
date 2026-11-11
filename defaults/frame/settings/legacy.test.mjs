@@ -8,7 +8,7 @@ test('legacy settings section and choice navigation is layout scoped', async () 
   const calls = [];
   const modules = {
     'gpui-kit': {View: class {}, div() {}, svg() {}, image() {}},
-    'gpui-base': {v_flex() {}, h_flex() {}, Scrollbar: {}, InputState: {}, Input: {}},
+    'gpui-base': {v_flex() {}, h_flex() {}, Scrollbar: {}, InputState: {}, Input: {}, Popup: {new: () => { const p = {}; p.when = () => p; p.content = () => p; return p; }}},
     herdr: {
       hc() {}, run: (...a) => calls.push(a), theme() {}, themes: () => [{name: 'dark', light: false}, {name: 'light', light: true}],
       fonts: () => ['A', 'B'], updates: () => ({core: {version: '2.0.0', ready: '2.1'}, app: {updates: true, ready: '3'}, checks: true}), telemetry() {}, settings: () => ({font_size: 15}), layouts: () => [], shared: () => 'rowan-terminal',
