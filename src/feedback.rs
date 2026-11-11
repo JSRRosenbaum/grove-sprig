@@ -31,8 +31,13 @@ pub fn draft(message: &str, email: &str, images: usize, from: &str, layout: &str
     })
 }
 
-/// Where the form keeps the screenshots it shows (its data folder: `image()` reads from the app home).
-fn shots_dir() -> PathBuf { crate::mods::app_dir().join("data").join("frame-feedback") }
+/// Paths returned to the form are relative to app home, where `image()` reads.
+fn shots_prefix() -> String {
+    let id = crate::instances::id();
+    if id == 1 { "data/frame-feedback/".into() } else { format!("views/{id}/data/frame-feedback/") }
+}
+
+fn shots_dir() -> PathBuf { crate::instances::state_dir().join("data").join("frame-feedback") }
 
 fn sniff(bytes: &[u8]) -> Option<&'static str> {
     if bytes.starts_with(b"\x89PNG\r\n\x1a\n") { Some("png") }
@@ -58,7 +63,7 @@ pub fn attach(bytes: &[u8]) -> Result<String, String> {
     let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or_default();
     let name = format!("shot-{stamp}.{ext}");
     std::fs::write(dir.join(&name), bytes).map_err(|e| e.to_string())?;
-    Ok(format!("data/frame-feedback/{name}"))
+    Ok(format!("{}{name}", shots_prefix()))
 }
 
 /// Picker and external drops share the same conversion and size limits.
@@ -84,7 +89,8 @@ pub fn clear_shots() {
 
 /// A path `attach` returned, checked again before it leaves the machine.
 fn shot_file(rel: &str) -> Result<PathBuf, String> {
-    let name = rel.strip_prefix("data/frame-feedback/").filter(|n| n.starts_with("shot-") && !n.contains(['/', '\\']))
+    let prefix = shots_prefix();
+    let name = rel.strip_prefix(prefix.as_str()).filter(|n| n.starts_with("shot-") && !n.contains(['/', '\\']))
         .ok_or("Unknown screenshot.")?;
     let path = shots_dir().join(name);
     let bytes = std::fs::read(&path).map_err(|_| "A screenshot is gone. Remove it and add it again.".to_owned())?;

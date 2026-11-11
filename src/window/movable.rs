@@ -24,7 +24,7 @@ pub struct WinDrag {
 // ---- windows.json: spots by key, and the kept windows of each layout
 
 fn path() -> PathBuf {
-    file("windows.json")
+    state_file("windows.json")
 }
 
 fn read() -> Value {

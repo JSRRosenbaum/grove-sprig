@@ -24,6 +24,29 @@ from the same parts you have.
 
 `herdr-app` controls this app; `hc` controls herdr-core.
 
+## Multiple windows in the Rowan fork
+
+Each ordinary `herdr-app` launch opens another window on the same configuration
+and herdr-core. It does not duplicate running terminals. Windows keep independent
+selection, sidebar/mod state, layout clicks and placement; spaces, tabs and splits
+are shared core structure. Closing one window leaves the others and core running.
+Configuration files and mod code are shared and hot-reload in every window.
+
+Use `herdr-app windows` to discover live numeric window IDs. Target a specific
+one with `herdr-app --window 2 status`, `ls`, `shot <file>` or `do <command>`.
+With no explicit target, the only live window or the uniquely active one is used.
+An ambiguous selection or missing explicit ID fails instead of changing another
+window. Do not launch a window merely to inspect it.
+
+Slot 1 retains the existing view-state paths below. Additional windows use
+`views/<id>/` for `view.json`, `shared.json`, mod `data/`, `seen.json`,
+`window.json`, `windows.json` and `layouts/.state/`. Slots are OS-locked for the
+window's lifetime and reused after closing; a new slot starts with a copy of
+the primary slot's saved JSON state, not another configuration profile.
+`installed.json` and source configuration remain shared. Automatic completion
+and blocked sounds have one owner across windows; explicit sound previews are
+unaffected.
+
 ## What you can and can't do
 
 You can: rearrange and restyle the whole window (layouts), rebind any key,
@@ -56,9 +79,9 @@ commands. They're rewritten on every start to match this version.
   It does not lay out the mod or run deferred rows, nested renders, or later
   async states. Never call a mod done without a passing check; also try it
   in the app.
-- **Escape hatch:** `ctrl-alt-shift-escape` always works: it sets the shown
-  layout and `keys.json` aside (`*.reset-<time>`) and goes back to the
-  default `main` layout. Nothing can rebind it.
+- **Escape hatch:** `ctrl-alt-shift-escape` sets the shown layout and
+  `keys.json` aside (`*.reset-<time>`) and goes back to `main`, except in
+  `rowan-terminal` where legacy key ownership leaves it to the terminal.
 
 ## Seeing the window
 
@@ -69,7 +92,7 @@ images, overlays, popups and floats. It captures the app, not the desktop,
 at the window’s physical pixel size, even when covered or minimized. No
 screen-recording permission is needed. Herdr must be running; before its
 first frame or during GPU recovery it reports an error instead of a PNG.
-`HERDR_APP_HOME` selects which running window to ask, as with `status`.
+`HERDR_APP_HOME` selects the configuration; `--window <id>` selects a live window.
 
 ## The files
 
@@ -502,6 +525,15 @@ shortcuts must then be added by hand.
 - Sections: `global`, `layout:<name>` (while `layouts/<name>.json` shows),
   `terminal` (a terminal has focus), `mod:<name>`. The more specific section
   wins: `layout:terminals` over `global`, `terminal` over both.
+- Space-separated strokes form a chord (`ctrl-space c`). The Rowan fork shows
+  GPUI's real pending chord in a non-focusable PREFIX indicator. If a currently
+  applicable app chord has an Escape continuation (`ctrl-space escape`), its
+  timeout is paused until completion/cancellation; other chords keep GPUI's timeout.
+  Focus changes, OS-window deactivation, and unmatched continuations clear it.
+- `app.help` opens the searchable key guide (the legacy guide in `rowan-terminal`);
+  terminal bindings override layout bindings, then globals.
+  Mod-only bindings are separately labeled. `herdr.window().layout_name` and
+  `.pending_keys` expose the native state to mods; CLI `status` includes both.
 - An action is a command (`name`, or `name:value`: the value fills the
   command's first argument), `send:<text>` (types into the terminal),
   `<mod>.<command>` (delivered to that mod's `nextCommand()`), or `terminal`
@@ -554,6 +586,9 @@ The main ones:
   `space.close {id?, confirmed?}`, `space.rename {id?, name}` ("": Herdr's name again),
   `space.move {id, index}`, `space.select {index | id}`, `space.next`, `space.prev`.
   With no `argv`, the target core chooses that machine's default shell (PowerShell 7 when available on Windows).
+  Keys and clicks select the new space. CLI/script creation preserves the current
+  workspace, tab and pane; call `space.select {id}` with the returned `space` only
+  when an intentional switch was requested. Do not create-and-restore focus.
 - Tabs: `tab.new {name?, space?, folder?, argv?, task?}` (argv: an
   agent to run, task: its first message). Agents run in your interactive
   shell (including fish), which stays open after the agent exits. A terminal
@@ -566,8 +601,12 @@ The main ones:
   `tab.select {index | id}`, `tab.next`, `tab.prev`,
   `tab.settle {id?}`, `tab.unsettle {id?}` (index, next and prev
   skip settled tabs).
+- `machine.select {machine}` selects a ready machine, including one without
+  spaces. Pass an empty string for local; new spaces follow this selection.
 - Panes: `pane.split {direction: "right" | "down", pane?, argv? | mod?, props?}` (a new
-  terminal, or a mod pane), `pane.close {pane?}`,
+  terminal, or a mod pane), `pane.close {pane?}`, `pane.rename {pane?, name?}`,
+  `pane.resize {direction, pane?}`, `pane.resize_mode` (arrows or h/j/k/l, Escape/Enter exits),
+  `pane.cycle {direction: "next" | "prev"}`, `pane.last`,
   `pane.zoom {pane?}`, `pane.focus {pane | terminal}`, `pane.go {direction}`,
   `pane.swap {pane?, direction | target}`.
   `pane.go` prefers the most recently focused pane along the nearest edge in that
@@ -591,11 +630,17 @@ The main ones:
   `terminal.show {terminal?, pane?}`, `terminal.search` (screen and scrollback;
   find bar state stays with that terminal), `terminal.copy`, `terminal.paste` (copied
   files, such as Finder's or a clipboard manager's image, as if dropped; an image
-  alone as `terminal.paste_image` pastes it), `terminal.paste_image` (Ctrl+V: an
-  image, into a terminal on another machine: copied there, its path pasted; on
-  Windows, clipboard text is pasted; otherwise Ctrl+V goes to the program, which
-  reads the clipboard itself). TIFF and BMP clipboard
+  alone as `terminal.paste_image` pastes it), `terminal.paste_image` (the configured
+  image-paste key: an image for a remote terminal is copied there and its path
+  pasted; otherwise frontend clipboard text is pasted remotely or on Windows.
+  Local Unix Ctrl+V still goes to the program, which reads its own clipboard).
+  The legacy layout supplies Ctrl+Shift+V for terminal-side paste unless the
+  legacy profile explicitly assigns that chord. TIFF and BMP clipboard
   images are converted to PNG before sending,
+  `terminal.copy_mode` enters keyboard scrollback selection; `terminal.clear` clears
+  authoritative primary-screen history above the wrapped cursor line without sending
+  input (alternate screen is unchanged); `terminal.edit_scrollback` opens a transferred
+  snapshot in a transient overlay on the source machine,
   `terminal.right_click {to: "program" | "menu", terminal?}` (where right-clicks go
   when the program takes the mouse; kept as its label `herdr.right-click=program`;
   Shift+right-click is always Herdr's menu),
@@ -609,9 +654,13 @@ The main ones:
   right-click targeting follow keyboard focus, including peek and floating terminals;
   with no terminal holding keyboard focus, they use the focused pane or block.
   Dragging a text selection past the terminal's top or bottom scrolls while held;
-  releasing stops it. Programs that track the mouse still get their mouse events
-  (hold Shift to select text instead). A drag stays with the terminal where it
-  started, including its release outside the pane; other panes don't receive it.
+  releasing a nonempty selection copies it, clears the highlight, and briefly shows
+  "Copied". An empty click or canceled drag does not copy. Programs that track
+  the mouse still get their mouse events (hold Shift to select text instead).
+  A drag stays with the terminal where it started, including its release outside
+  the pane; other panes don't receive it. Ctrl-click (Cmd-click on macOS) opens
+  URLs and existing local paths, including OSC 8 links; paths shown by a remote
+  terminal are not assumed to name files on this machine.
   Terminals display Kitty graphics, including Unicode placeholder images used by
   programs such as yazi; partial images and scrolling follow the placeholder cells.
 - Agents: `agent.next`, `agent.prev`, `agent.focus {terminal}`.
@@ -624,6 +673,11 @@ The main ones:
   (sections: `look`, `machines`, `alerts`, `updates`, `privacy`; Machines lists, updates, renames and removes ssh machines; settings edit the same files you do).
   `app.check_updates` (only a successful check reports Up to date; a failed check clears the checked time and can be retried), `app.update_core` (a newer herdr-core of this generation, terminals kept;
   never one a package manager owns), `app.welcome`, `app.whats_new`, `app.feedback {message?, from?}` (from `"person"` or `"agent"`; opens a review window, where the person can paste up to 3 screenshots; never sends until the person clicks Send), `app.reset`,
+  `app.reload` explicitly reloads settings, keys and programs.
+  Legacy integration commands: `legacy.prefix_cancel`, `legacy.prefix_repeat`,
+  `legacy.key {keys, space?}`, and `legacy.plugin {action, command?, type?}`.
+  `agent.select {index}` focuses the indexed agent and `notification.open_target`
+  opens the latest visible actionable notification.
   `app.theme {name}`, `app.zoom_in`, `app.zoom_out`, `app.zoom_reset`,
   `app.update` (restart into a downloaded update).
   Add machine lists all named ssh-config hosts in a scrollable list. Machines
@@ -837,7 +891,9 @@ has 120 programs (agents, editors, runtimes, tools, databases, infra);
   to) and Remove worktree open it as a dialog with props `{space, folder?,
   action: "new" | "open" | "remove"}` (the repo: folder, else where the
   space's first terminal is), or with `{branch, tab?, argv?}` to make one at once with
-  that first tab; checkouts go to
+  that first tab; New worktree starts immediately with an autogenerated branch
+  from the current checkout, without requesting a title or Enter confirmation.
+  An explicit `branch` prop retains its checkout behavior. Checkouts go to
   `~/.herdr/worktrees/<repo>/<branch>` on the space's machine, a constant
   at its top; the
   `spaces` sidebar nests worktree spaces under their repo's and shows each
@@ -966,7 +1022,9 @@ All of it is in `herdr.d.ts`. In short:
 - Live data: `spaces()` (each with its tabs, status, name, named, folder,
   machine, branch), `machines()` (name, null for this computer; layout:
   `loading`, `ready`, or `unavailable` on this connection; loading ends on
-  the first read even if it fails, and offline machines are unavailable),
+  the first read even if it fails, and offline machines are unavailable;
+  `space_order` is the last core-acknowledged workspace order as qualified IDs,
+  or null before the first document read—unlike optimistic `spaces()`),
   `agents()` (status, app, space, tab, pinned, focused; "done" turns "idle"
   once someone looks at it on any Herdr client), `terminals()`
   (every core terminal), `focused()`, `layout()`, `theme()` (every color by
@@ -1026,6 +1084,17 @@ All of it is in `herdr.d.ts`. In short:
   A returned root path means refresh everything (the pending paths are bounded).
   Files also refreshes on its 10-second timer:
   `cx.spawn(async (cx) => { for (;;) { await watchFolder(dir); this.reload(); cx.notify(); } })`.
+- Core documents: `readDocument(name, { on })` returns `{ value, version }`;
+  `writeDocument(name, value, version, { on })` compares the version and returns
+  `{ written: true, version }`, or `{ written: false, value, version }` with
+  the latest document on conflict. Merge and retry conflicts; other errors reject.
+  Omit `on` (or use null) for this core; a machine name routes to that core.
+  Use a separate document name for mod data, not the app's `herdr-app` document.
+  Sprig's Rowan sidebar stores repository membership in `sprig-sidebar`, keyed by
+  source-local workspace ID. It restores matching cwd entries before Git discovery,
+  merges version conflicts, and prunes only against a fresh source layout; offline
+  cores keep their records. Window selection, folds and herds are not in that
+  document. New sidebar mods require a frontend exposing these document functions.
 - `notify({ ..., action: { name, args } })`: the toast runs the command when clicked.
 - This copy: `props()`, `shared(key)` / `setShared(key, value)` (every mod
   sees it; setting re-renders all), `nextCommand()` (key commands for this

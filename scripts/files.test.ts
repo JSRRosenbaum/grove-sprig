@@ -3,7 +3,8 @@ import { readFile, mkdtemp, mkdir, writeFile, rm, symlink } from "node:fs/promis
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const source = await readFile(new URL("../defaults/mods/files/main.js", import.meta.url), "utf8");
+for (const path of ["../defaults/mods/files/main.js"]) {
+const source = await readFile(new URL(path, import.meta.url), "utf8");
 const directorySource = source.slice(source.indexOf("async function directory("), source.indexOf("\nexport default class"));
 const loadDirectory = (exec: Function, platform: string) => new Function("exec", "window", `${directorySource}; return directory;`)(exec, () => ({ platform }));
 const directory = loadDirectory(
@@ -54,7 +55,7 @@ test("Files keeps remote POSIX directory listings on sh", async () => {
   expect(calls).toEqual(["sh"]);
 });
 
-test("Files lists literal folder names, not shell expressions", async () => {
+test(`${path}: lists literal folder names, not shell expressions`, async () => {
   const root = await mkdtemp(join(process.platform === "linux" ? "/var/tmp" : tmpdir(), "herdr-files-"));
   try {
     for (const name of ["Test Folder (ACME)", "O'Brien $folder; (ACME)", "O’Brien ‘quoted’ ‚low‛"]) {
@@ -71,7 +72,7 @@ test("Files lists literal folder names, not shell expressions", async () => {
   }
 });
 
-test("Files preserves Unicode names when listing and expanding folders", async () => {
+test(`${path}: preserves Unicode names when listing and expanding folders`, async () => {
   const root = await mkdtemp(join(tmpdir(), "herdr-files-unicode-"));
   try {
     const folder = "中文目录 O'Brien (测试)", file = "项目说明.txt", child = "子文件.txt";
@@ -88,7 +89,7 @@ test("Files preserves Unicode names when listing and expanding folders", async (
   }
 });
 
-test("Files follows directory links one level at a time", async () => {
+test(`${path}: follows directory links one level at a time`, async () => {
   const root = await mkdtemp(join(tmpdir(), "herdr-files-links-"));
   try {
     const target = join(root, "versions");
@@ -127,3 +128,4 @@ test("Files follows directory links one level at a time", async () => {
     await rm(root, { recursive: true, force: true });
   }
 });
+}

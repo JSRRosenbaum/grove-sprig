@@ -161,11 +161,8 @@ export default class MachineAdd extends View {
   macCard(t, target) {
     const mac = this.macs[target];
     return v_flex()
-      .mx(10)
-      .mb(8)
       .p(12)
       .gap(8)
-      .rounded(10)
       .bg(t.blocked + "14")
       .border_1()
       .border_color(t.blocked + "40")
@@ -177,7 +174,7 @@ export default class MachineAdd extends View {
           .text_color(t.muted)
           .child("macOS asks on the Mac's own screen before an agent reads Desktop, Documents or Downloads, and waits until someone answers. Give herdr-core Full Disk Access there and it never asks again: in the list, press + and pick this file:"),
       )
-      .child(div().px(8).py(4).rounded(6).bg(t.background).border_1().border_color(t.border).text_size(12).text_color(t.foreground).child(mac.core))
+      .child(div().px(8).py(4).bg(t.background).border_1().border_color(t.border).text_size(12).text_color(t.foreground).child(mac.core))
       .child(
         h_flex()
           .gap(8)
@@ -189,7 +186,6 @@ export default class MachineAdd extends View {
               .px(12)
               .flex()
               .items_center()
-              .rounded(7)
               .bg(t.solid)
               .text_color(t.solid_foreground)
               .text_size(12)
@@ -227,6 +223,36 @@ export default class MachineAdd extends View {
         .child(this.copiedCommand === command ? "Copied" : "Copy"))));
   }
 
+  // The terminal window's title bar.
+  bar(t) {
+    return h_flex()
+      .size_full()
+      .pl(12)
+      .gap(8)
+      .items_center()
+      .bg(t.chrome)
+      .border_b(1)
+      .border_color(t.border)
+      .text_size(12.5)
+      .text_color(t.muted)
+      .child(svg(I("server")).size(14))
+      .child(div().flex_1().child(`Adding ${props().target}: answer it here`))
+      .child(
+        div()
+          .id("ma-bar-close")
+          .w(22)
+          .h_full()
+          .flex()
+          .items_center()
+          .justify_center()
+          .cursor_pointer()
+          .hover((s) => s.bg(t.hover))
+          .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
+          .on_click(() => closeOverlay(props().overlay))
+          .child(svg(I("x")).size(12)),
+      );
+  }
+
   row(t, target, label, sub) {
     const st = this.state[target];
     const done = this.isAdded(target);
@@ -237,10 +263,9 @@ export default class MachineAdd extends View {
         : div()
               .id(`ma-add-${target}`)
               .px(10)
-              .h(26)
+              .h(40)
               .flex()
               .items_center()
-              .rounded(7)
               .border_1()
               .border_color(t.input)
               .bg(t.raised)
@@ -257,10 +282,9 @@ export default class MachineAdd extends View {
         h_flex()
           .id(`ma-row-${target}`)
           .h(40)
-          .px(10)
+          .pl(18)
           .gap(10)
           .items_center()
-          .rounded(8)
           .hover((s) => s.bg(t.hover))
           .when(idle, (el) => el.cursor_pointer().on_click((_e, cx) => this.add(target, cx)))
           .child(svg(I("server")).size(15).text_color(t.muted))
@@ -281,19 +305,20 @@ export default class MachineAdd extends View {
       .on_key_down((e, cx) => this.key(e, cx))
       .w_full()
       .min_h(0)
-      .p(18)
+      .border_1()
+      .border_color(t.border)
       .bg(t.popover)
       .text_color(t.foreground)
-      .child(h_flex().items_center().child(div().flex_1().text_size(15).font_semibold().child("Add a machine")).child(div().id("ma-esc").px(6).py(2).rounded(5).text_size(11).text_color(t.dim).cursor_pointer().hover((s) => s.bg(t.hover).text_color(t.foreground)).on_click(() => this.close()).child("Esc")))
+      .child(h_flex().px(18).py(12).items_center().child(div().flex_1().text_size(15).font_semibold().child("Add a machine")).child(div().id("ma-esc").px(6).py(2).rounded(5).text_size(11).text_color(t.dim).cursor_pointer().hover((s) => s.bg(t.hover).text_color(t.foreground)).on_click(() => this.close()).child("Esc")))
       .child(
         div()
-          .pt(6)
+          .px(18).py(6)
           .text_size(12.8)
           .line_height("19px")
           .text_color(t.muted)
           .child("A VPS, a Mac mini, a box at home: Herdr reaches it over ssh, and agents there keep running while your laptop sleeps."),
       )
-      .child(div().pt(16).pb(6).text_size(11.5).font_medium().text_color(t.dim).child(hosts.length ? "From your ssh config" : "Your ssh config lists no hosts"))
+      .child(div().px(18).pt(16).pb(6).text_size(11.5).font_medium().text_color(t.dim).child(hosts.length ? "From your ssh config" : "Your ssh config lists no hosts"))
       .child(
         v_flex()
           .id("ma-hosts")
@@ -303,14 +328,14 @@ export default class MachineAdd extends View {
           .overflow_y_scroll()
           .children(
             this.hosts === null
-              ? [div().px(10).py(8).text_size(12.5).text_color(t.dim).child("Reading ~/.ssh/config…")]
+              ? [div().px(18).py(8).text_size(12.5).text_color(t.dim).child("Reading ~/.ssh/config…")]
               : hosts.map((h) => this.row(t, h.alias, h.alias, [h.user, h.hostname].filter(Boolean).join("@") || (h.aliases.length ? `also ${h.aliases.join(", ")}` : ""))),
           ),
       )
-      .child(div().pt(14).pb(6).text_size(11.5).font_medium().text_color(t.dim).child("Or type how ssh reaches it"))
+      .child(div().px(18).pt(14).pb(6).text_size(11.5).font_medium().text_color(t.dim).child("Or type how ssh reaches it"))
       .child(
         h_flex()
-          .gap(8)
+          .px(18)
           .child(
             Input.new(this.input)
               .flex_1()
@@ -318,7 +343,6 @@ export default class MachineAdd extends View {
               .px(10)
               .gap(6)
               .items_center()
-              .rounded(8)
               .border_1()
               .border_color(this.inputFocused ? t.accent : t.input)
               .bg(t.background)
@@ -332,7 +356,6 @@ export default class MachineAdd extends View {
               .px(14)
               .flex()
               .items_center()
-              .rounded(8)
               .bg(t.solid)
               .text_color(t.solid_foreground)
               .text_size(12.5)
@@ -343,6 +366,6 @@ export default class MachineAdd extends View {
               .child("Add"),
           ),
       )
-      .when(Boolean(this.typed.trim() && this.state[this.typed.trim()]), (el) => el.child(div().pt(6).child(this.message(t, this.typed.trim()))));
+      .when(Boolean(this.typed.trim() && this.state[this.typed.trim()]), (el) => el.child(div().px(18).py(6).child(this.message(t, this.typed.trim()))));
   }
 }

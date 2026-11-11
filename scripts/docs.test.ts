@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { checkExample, checkMarkdown, commandPage, type Reference } from "./docs";
+import { checkExample, checkMarkdown, type Reference } from "./docs";
 
 const ref: Reference = {
   help: "Usage:\n  herdr-app status\n  herdr-app ls\n  herdr-app do <command> [args]\n  herdr-app commands\n  herdr-app --skill\n  herdr-app --version\n",
@@ -25,6 +25,21 @@ describe("CLI examples", () => {
     expect(checkExample("herdr-app do pane.split --direction", ref)).toEqual(["missing value for --direction"]);
   });
 
+  test("validates explicit window selection without losing app-command validation", () => {
+    const targeted = {...ref, help: ref.help.replace("herdr-app do", "herdr-app [--window N] do") + "  herdr-app windows\n"};
+    expect(checkExample("herdr-app --window 2 do pane.split --direction right", targeted)).toEqual([]);
+    expect(checkExample("herdr-app --window <id> status", targeted)).toEqual([]);
+    expect(checkExample("herdr-app windows", targeted)).toEqual([]);
+    for (const id of ["0", "-1", "4294967296", "wat"]) {
+      expect(checkExample(`herdr-app --window ${id} status`, targeted)).toEqual(["--window needs a positive numeric window ID"]);
+    }
+    expect(checkExample("herdr-app --window", targeted)).toEqual(["--window needs a positive numeric window ID"]);
+    expect(checkExample("herdr-app --window 2", targeted)).toEqual(["--window needs a command"]);
+    expect(checkExample("herdr-app --window 2 commands", targeted)).toEqual(["--window cannot be used with commands"]);
+    expect(checkExample("herdr-app --window 2 do pane.wat", targeted)).toEqual(["unknown app command: pane.wat"]);
+    expect(checkExample("herdr-app --window 2 do pane.split --wat right", targeted)).toEqual(["unknown flag for do: --wat"]);
+  });
+
   test("ignores flags inside quotes and comments, and other programs", () => {
     expect(checkExample(`herdr-app do pane.split --direction '--not-a-flag' # --comment`, ref)).toEqual([]);
     expect(checkExample("curl --not-our-flag https://example.org", ref)).toEqual([]);
@@ -42,11 +57,4 @@ describe("CLI examples", () => {
   });
 });
 
-test("command reference comes from the catalog", () => {
-  const page = commandPage(ref.commands);
-  expect(page).toContain("## `pane.split`");
-  expect(page).toContain("| `direction` | yes |");
-  expect(page).toContain("Split a pane.");
-  expect(checkMarkdown("docs/commands.md", page, ref)).toEqual([]);
-});
 

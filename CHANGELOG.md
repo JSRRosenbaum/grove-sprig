@@ -76,6 +76,149 @@
 - `herdr-app check` no longer touches the running app's shared mod state. (#516, thanks @JJLiebig)
 - The terminal menu leaves out pane items where there's no pane, and mods see which terminal has the keyboard. (#553, #554, thanks @thuanlm215)
 
+## Unreleased
+
+### Changed
+- The Sprig front-end ships inside the app binary. The 19 customization mods,
+  the `rowan-terminal` layout and its theme are the app's owned defaults
+  (`defaults/mods`, `defaults/layouts`, `defaults/themes`), embedded at build
+  time and written into the app home when the app starts: one artifact per
+  release, no per-host front-end payload. `sprig/install.py` installs the key
+  profile, the OMP companion beside `herdr-core`, the legacy helper modules and
+  the worktree runtime, and retires the front-end files it installed on earlier
+  machines.
+- The appearance now rides on the mods Herdr ships instead of clones of the
+  0.1.7 ones, so upstream behavior the clones lacked is back: the Changes
+  panel's commit workflow, per-folder saved navigation in Files, the sidebar
+  following panel width, and worktree dialog timeouts.
+- A window with no layout chosen opens on `rowan-terminal`. `app.reset` and a
+  layout whose mods are missing still fall back to `main`, the plain Herdr
+  screen.
+- The installer retires the bundle's namespaces in an existing app home —
+  `mods/rowan-*`, `mods/square-dracula-*`, `layouts/rowan-terminal.*`,
+  `themes/rowan-terminal.*` — because installers before the ownership manifest
+  wrote part of the bundle without recording it. Names the app binary ships are
+  left to the app: the folded front-end kept some of those names
+  (`mods/rowan-spaces`, `layouts/rowan-terminal.json`,
+  `themes/rowan-terminal.json`), and retiring a file the app owns means the next
+  launch writes it back while a running window reloads a file that is gone. The
+  receipt reports `protected_defaults`. Rowan's app home converged to its 27
+  shipped mods with 16 clone directories retired, 8 shipped files protected, and
+  both live windows reporting no errors. Layouts, themes and mods under any other
+  name are personal and stay, and everything removed is copied to the backup
+  home first.
+
+### Fixed
+- New worktree immediately creates an automatically named branch and workspace,
+  without a title prompt or confirmation keystroke.
+  (#1, thanks @JSRRosenbaum)
+
+## Sprig upstream integration — 2026-11-06
+
+- Rebased Sprig onto upstream herdr-app `cfcf836` (released 0.1.13 plus reviewed
+  master fixes), taking upstream code as the base and re-implementing Sprig
+  behavior on top of it.
+- Retained concurrent independent windows, native prefix/help, the compact herd
+  sidebar, durable repository/worktree grouping, prompt-free New worktree and
+  remote clipboard paste on the new upstream base.
+- Source pins are recorded in `sprig/upstreams.json`.
+- The Sprig file mod lists folders on the machine that owns them, as the shipped
+  mod does: it targets that machine and falls back to its PowerShell when the
+  machine has no `sh`, instead of raising.
+- Third-party notices regenerated for the 0.1.13 dependency graph, which needs
+  `cargo-about 0.9.3` built with its `cli` feature.
+
+## [sprig-preview-2026.11.03.2] - 2026-11-03
+
+### New
+- Remember workspace repository/worktree groups in each source core so other
+  Sprig frontends and reopened windows can restore the hierarchy without
+  rediscovering every checkout. No herdr-core upgrade is required.
+  (#1, thanks @JSRRosenbaum)
+- Share hierarchy updates with version-checked merges; closing a workspace
+  removes its record without orphaning surviving worktrees. Disconnected
+  machines keep their metadata. (#1, thanks @JSRRosenbaum)
+
+### Fixed
+- Measure a visible pane before its initial terminal attachment, preventing an
+  old-size snapshot from being decoded at the new viewport width and then
+  corrected by another resize/repaint. Hidden tabs remain attached.
+  (#1, thanks @JSRRosenbaum)
+
+Requires the matching Sprig frontend and customization bundle; the core,
+ConPTY and native annotation/review runtimes are unchanged.
+
+## [sprig-preview-2026.11.03.1] - 2026-11-03
+
+### Fixed
+- Discover repository/worktree groups with bounded lightweight Git queries
+  instead of serial status scans, then publish each discovery batch together
+  so the sidebar does not reshuffle one completed lookup at a time.
+  (#1, thanks @JSRRosenbaum)
+- Handle Windows line endings in repository paths without requiring a separate
+  Unix `realpath` command. (#1, thanks @JSRRosenbaum)
+
+Customization-only update; native app/core binaries are unchanged.
+
+## [sprig-preview-2026.11.03] - 2026-11-03
+
+### Fixed
+- Paste frontend clipboard text into remote terminals instead of sending a
+  Ctrl+V keystroke to a program that cannot read that clipboard. Remote image
+  transfer and local Unix Ctrl+V behavior remain unchanged.
+  (#1, thanks @JSRRosenbaum)
+- Restore Ctrl+Shift+V terminal paste in the legacy layout without overriding
+  an explicitly assigned legacy shortcut. (#1, thanks @JSRRosenbaum)
+
+Unsigned development snapshot; Windows runtime/desktop checks and repository
+CI qualification remain pending.
+
+## [sprig-preview-2026.11.02] - 2026-11-02
+
+### New
+- Publish paired Linux x86-64 and Windows x64 app/core/customization development
+  bundles, with native annotation/review tools, checksums and install/rollback
+  instructions. Thanks @JSRRosenbaum.
+- Restore legacy prefix/help, navigation, copy/search, pane controls and
+  host-specific shortcuts. (#1, thanks @JSRRosenbaum)
+
+### Fixed
+- Creating a workspace in the background no longer steals the current view.
+  (#1, thanks @JSRRosenbaum)
+- Restore copy-on-release feedback and Windows Ctrl-click URL handling.
+  Windows binaries no longer need a separate VC++ Redistributable.
+  (#1, thanks @JSRRosenbaum)
+
+Development snapshot, not a stable/upstream release. Windows desktop validation
+and the disabled repository CI gate remain outstanding. Linux binaries require
+glibc 2.44; no macOS or ARM binaries are included.
+
+## Sprig background workspace focus fix — 2026-11-02
+
+- Background workspace creation no longer switches the addressed window away
+  from its current workspace, tab or pane. Keys/clicks and intentional worktree
+  launches still select the newly created workspace.
+
+## Sprig legacy interaction parity — 2026-11-02
+
+- Restore original prefix ownership, modal navigation, terminal Go To, keyboard
+  copy/search, pane cycling/resize, rename and field-local kill/yank controls.
+- Compile the original host-specific key profiles and custom commands; newer
+  bindings no longer intercept keys owned by terminal programs.
+- Port annotation/review, Worktrunk, Workthreads and sci-fi grid actions to
+  herdr-core without restarting agents or reinstalling the legacy server.
+- Restore copy-on-release feedback and use Windows' registered URL handler for
+  Ctrl-click links. Build Windows executables with the C runtime linked statically.
+- Clear authoritative terminal history without sending input, preserving the
+  wrapped cursor line and leaving alternate-screen programs unchanged.
+
+- Rebased Sprig onto upstream herdr-app `cfcf836` (released 0.1.13 plus reviewed
+  master fixes), taking upstream code as the base and re-implementing Sprig
+  behavior on top of it.
+- Retained concurrent independent windows, native prefix/help, the compact herd
+  sidebar, durable repository/worktree grouping, prompt-free New worktree and
+  remote clipboard paste on the new upstream base.
+- Source pins are recorded in `sprig/upstreams.json`.
 ## [0.1.13] - 2026-11-04
 <!-- spotlight macos -->
 
@@ -113,7 +256,6 @@
 - The command palette scrolls smoothly. (#348, thanks @patrick-xin)
 - Add machine lists hosts from Include files in ~/.ssh/config. (#328, thanks @ashrodan)
 - Selected text in mod text views stays readable.
-
 ## [0.1.12] - 2026-11-02
 <!-- spotlight macos -->
 
@@ -204,6 +346,19 @@
 - `herdr-app check` no longer crashes on mods with scrolling lists or layout animations.
 
 ## [0.1.9] - 2026-10-30
+
+### Unofficial Rowan fork additions - 2026-10-31
+- Ordinary launches open concurrent windows on the same configuration and core.
+- Each window keeps separately locked, persistent view/mod state; shared configuration
+  and core terminals are not duplicated.
+- `herdr-app windows` lists live windows; `--window <id>` explicitly targets CLI
+  inspection and commands. Ambiguous requests fail instead of guessing a window.
+- Automatic completion/blocked sounds have one owner across windows.
+- Pending native chords show a bottom PREFIX bar after the sidebar, following
+  its resized/hidden edge with left-aligned cancellation/help hints. App chords
+  with an effective Escape continuation stay armed until completion or cancellation.
+- The key guide filters to the active layout and terminal binding precedence,
+  uses readable action labels, and searches both shortcuts and actions.
 
 ### Fixed
 - On macOS, updates keep Herdr's Apple signature again, so macOS stops forgetting the permissions you gave Herdr.

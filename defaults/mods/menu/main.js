@@ -96,6 +96,7 @@ export default class Menu extends View {
   init(_props, cx) {
     this.at = 0;
     this.git = null;
+    this.reframed = false;
     this.handle = cx.focus_handle();
     this.handle.focus();
     const p = props();
@@ -112,11 +113,25 @@ export default class Menu extends View {
     const it = items(props(), this.git)[i];
     if (!it) return;
     closeOverlay(props()?.overlay);
-    if (it[1] === "worktree") openOverlay({ mod: "worktree", kind: "dialog", ...(it[2].action === "open" ? { width: 560, height: 480 } : { width: 440, height: 260 }), props: it[2] });
+    if (it[1] === "worktree") openOverlay({ mod: "worktree", kind: "dialog", frame: "none", ...(it[2].action === "open" ? { width: 560, height: 480 } : { width: 440, height: 260 }), props: it[2] });
     else run(it[1], it[2]);
   }
 
   render(cx) {
+    const p = props();
+
+    // A pane header is a full-width block, so the framed popup lands away from
+    // the pointer: reopen frameless at the pointer and drop the framed one.
+    if (p?.tab === "pane" && !p.frameless) {
+      if (!this.reframed) {
+        this.reframed = true;
+        openOverlay({ mod: "menu", kind: "popup", frame: "none", at: "pointer", width: 220, height: 260, props: { tab: p.tab, target: p.target, frameless: true } });
+        closeOverlay(p.overlay);
+      }
+
+      return div();
+    }
+
     const t = theme();
     const list = items(props(), this.git);
     return v_flex()
@@ -124,7 +139,8 @@ export default class Menu extends View {
       .track_focus(this.handle)
       .w_full()
       .min_h(0)
-      .p(5)
+      .border_1()
+      .border_color(t.border)
       .bg(t.popover)
       .text_size(12.8)
       .on_key_down((e, cx) => {
@@ -138,13 +154,12 @@ export default class Menu extends View {
       .children(
         list.map((it, i) =>
           v_flex()
-            .when(i > 0 && (it[1].endsWith(".close") || it[1] === "app.help" || (it[1] === "app.theme" && list[i - 1][1] !== "app.theme")), el => el.child(div().mx(7).my(4).h(1).bg(t.border)))
+            .when(i > 0 && (it[1].endsWith(".close") || it[1] === "app.help" || (it[1] === "app.theme" && list[i - 1][1] !== "app.theme")), el => el.child(div().h(1).bg(t.border)))
             .child(h_flex()
             .id(`mi-${i}`)
             .h(31)
-            .px(8)
+            .px(13)
             .gap(9)
-            .rounded(7)
             .items_center()
             .justify_between()
             .text_color(t.foreground)

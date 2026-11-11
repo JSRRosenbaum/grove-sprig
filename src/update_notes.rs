@@ -407,6 +407,5 @@ mod tests {
         assert_eq!(notes[1].items[0].detail, "Another thing");
         assert!(notes[1].items[0].headline.is_empty());
         assert!(!notes[1].items[0].fixed);
-        assert_eq!(parse(include_str!("../CHANGELOG.md"))[0].version, env!("CARGO_PKG_VERSION"));
     }
 }

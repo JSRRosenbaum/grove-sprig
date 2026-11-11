@@ -490,6 +490,7 @@ pub struct Vt {
     last_mouse_report: Vec<u8>,
     pub cols: u16,
     pub rows: u16,
+    pub revision: u64,
     theme: Theme,
     /// The built-in 256-color palette, which the theme's 16 colors override.
     base_palette: [GhosttyColorRgb; 256],
@@ -652,6 +653,20 @@ const SCROLLBACK_MAX_BYTES: usize = 10_000_000;
 /// Units per pixel for selection gestures (see `select`).
 const SUBPIXEL: f32 = 64.0;
 
+/// An owned Ghostty cell reference that survives output and scrollback pruning.
+pub struct TrackedCell(GhosttyTrackedGridRef);
+
+impl TrackedCell {
+    pub fn point(&self) -> Option<(u32, u16)> {
+        let mut p = GhosttyPointCoordinate::default();
+        (unsafe { ghostty_tracked_grid_ref_point(self.0, GHOSTTY_POINT_TAG_SCREEN, &mut p) } == GHOSTTY_SUCCESS)
+            .then_some((p.y, p.x))
+    }
+}
+
+impl Drop for TrackedCell {
+    fn drop(&mut self) { unsafe { ghostty_tracked_grid_ref_free(self.0) } }
+}
 impl Vt {
     pub fn new(cols: u16, rows: u16) -> Vt {
         unsafe {
@@ -729,6 +744,7 @@ impl Vt {
                 mouse_event,
                 cols,
                 rows,
+                revision: 0,
                 theme: theme(),
                 base_palette: colors.palette,
                 gesture,
@@ -1041,6 +1057,110 @@ impl Vt {
         p.value.coordinate = GhosttyPointCoordinate { x, y };
         (unsafe { ghostty_terminal_grid_ref(self.term, p, &mut r) } == GHOSTTY_SUCCESS).then_some(r)
     }
+    pub fn move_tracked_cell(&self, cell: &TrackedCell, row: u32, col: u16) {
+        let mut point = GhosttyPoint { tag: GHOSTTY_POINT_TAG_SCREEN, ..Default::default() };
+        point.value.coordinate = GhosttyPointCoordinate { x: col, y: row };
+        unsafe { ghostty_tracked_grid_ref_set(cell.0, self.term, point) };
+    }
+
+    pub fn track_cell(&self, row: u32, col: u16) -> Option<TrackedCell> {
+        let mut p = GhosttyPoint { tag: GHOSTTY_POINT_TAG_SCREEN, ..Default::default() };
+        p.value.coordinate = GhosttyPointCoordinate { x: col, y: row };
+        let mut tracked = std::ptr::null_mut();
+        (unsafe { ghostty_terminal_grid_ref_track(self.term, p, &mut tracked) } == GHOSTTY_SUCCESS)
+            .then_some(TrackedCell(tracked))
+    }
+
+
+    /// Number of physical rows in the active screen, including scrollback.
+    pub fn history_rows(&self) -> u32 {
+        let mut low = 0u32;
+        let mut high = 1u32;
+        while self.grid_ref(GHOSTTY_POINT_TAG_SCREEN, 0, high).is_some() {
+            low = high;
+            high = high.saturating_mul(2);
+            if high == low { return high; }
+        }
+        while low + 1 < high {
+            let mid = low + (high - low) / 2;
+            if self.grid_ref(GHOSTTY_POINT_TAG_SCREEN, 0, mid).is_some() { low = mid; } else { high = mid; }
+        }
+        low + 1
+    }
+
+    pub fn viewport_top(&self) -> u32 {
+        let Some(r) = self.grid_ref(GHOSTTY_POINT_TAG_VIEWPORT, 0, 0) else { return 0 };
+        let mut p = GhosttyPointCoordinate::default();
+        if unsafe { ghostty_terminal_point_from_grid_ref(self.term, &r, GHOSTTY_POINT_TAG_SCREEN, &mut p) } == GHOSTTY_SUCCESS { p.y } else { 0 }
+    }
+
+    /// Read one physical row, without retaining snapshots across terminal mutations.
+    pub fn history_row(&self, y: u32) -> Option<Vec<char>> {
+        let mut r = self.grid_ref(GHOSTTY_POINT_TAG_SCREEN, 0, y)?;
+        let mut row = Vec::with_capacity(self.cols as usize);
+        for x in 0..self.cols {
+            r.x = x;
+            let mut cp = [0u32; 16];
+            let mut len = 0;
+            unsafe { ghostty_grid_ref_graphemes(&r, cp.as_mut_ptr(), cp.len(), &mut len) };
+            row.push(cp.first().filter(|_| len > 0).and_then(|c| char::from_u32(*c)).unwrap_or(' '));
+        }
+        Some(row)
+    }
+
+    /// Unicode scalars with their cell columns, retaining combining marks and
+    /// omitting the spacer half of wide cells.
+    pub fn history_characters(&self, y: u32) -> Option<Vec<(char, u16)>> {
+        let mut r = self.grid_ref(GHOSTTY_POINT_TAG_SCREEN, 0, y)?;
+        let mut result = Vec::with_capacity(self.cols as usize);
+        for x in 0..self.cols {
+            r.x = x;
+            let mut cell: GhosttyCell = Default::default();
+            let mut wide = GHOSTTY_CELL_WIDE_NARROW;
+            unsafe {
+                ghostty_grid_ref_cell(&r, &mut cell);
+                ghostty_cell_get(cell, GHOSTTY_CELL_DATA_WIDE, &mut wide as *mut _ as *mut c_void);
+            }
+            if wide == GHOSTTY_CELL_WIDE_SPACER_TAIL || wide == GHOSTTY_CELL_WIDE_SPACER_HEAD { continue; }
+            let mut cp = [0u32; 16];
+            let mut len = 0;
+            unsafe { ghostty_grid_ref_graphemes(&r, cp.as_mut_ptr(), cp.len(), &mut len) };
+            if len == 0 { result.push((' ', x)); }
+            else { result.extend(cp[..len.min(cp.len())].iter().filter_map(|c| char::from_u32(*c)).map(|c| (c, x))); }
+        }
+        Some(result)
+    }
+
+    pub fn select_history(&mut self, start: (u32, u16), end: (u32, u16)) {
+        let Some(a) = self.grid_ref(GHOSTTY_POINT_TAG_SCREEN, start.1, start.0) else { return };
+        let Some(b) = self.grid_ref(GHOSTTY_POINT_TAG_SCREEN, end.1, end.0) else { return };
+        let selection = GhosttySelection { size: std::mem::size_of::<GhosttySelection>(), start: a, end: b, rectangle: false };
+        unsafe { ghostty_terminal_set(self.term, GHOSTTY_TERMINAL_OPT_SELECTION, &selection as *const _ as *const c_void) };
+    }
+
+    /// Format the entire active history without changing the user's selection.
+    pub fn scrollback_text(&self) -> String {
+        let rows = self.history_rows();
+        let Some(start) = self.grid_ref(GHOSTTY_POINT_TAG_SCREEN, 0, 0) else { return String::new() };
+        let Some(end) = self.grid_ref(GHOSTTY_POINT_TAG_SCREEN, self.cols.saturating_sub(1), rows.saturating_sub(1)) else { return String::new() };
+        let selection = GhosttySelection { size: std::mem::size_of::<GhosttySelection>(), start, end, rectangle: false };
+        unsafe {
+            let opts = GhosttyTerminalSelectionFormatOptions {
+                size: std::mem::size_of::<GhosttyTerminalSelectionFormatOptions>(),
+                emit: GHOSTTY_FORMATTER_FORMAT_PLAIN, unwrap: true, trim: true,
+                selection: &selection,
+                ..Default::default()
+            };
+            let mut ptr = std::ptr::null_mut();
+            let mut len = 0usize;
+            if ghostty_terminal_selection_format_alloc(self.term, std::ptr::null(), opts, &mut ptr, &mut len) != GHOSTTY_SUCCESS || ptr.is_null() {
+                return String::new();
+            }
+            let text = String::from_utf8_lossy(std::slice::from_raw_parts(ptr, len)).into_owned();
+            ghostty_free(std::ptr::null(), ptr, len);
+            text
+        }
+    }
 
     /// The link at a viewport cell: a link the program marked (OSC 8), or a
     /// URL or path in the text. Follows lines the terminal wrapped, also into
@@ -1141,7 +1261,7 @@ impl Vt {
     }
 
     /// Whether the terminal wrapped screen row `y` onto the next.
-    fn wraps(&self, y: u32) -> bool {
+    pub fn wraps(&self, y: u32) -> bool {
         unsafe {
             let Some(r) = self.grid_ref(GHOSTTY_POINT_TAG_SCREEN, 0, y) else { return false };
             let mut line: GhosttyRow = Default::default();
@@ -1217,6 +1337,7 @@ impl Vt {
     }
 
     pub fn write(&mut self, bytes: &[u8]) {
+        self.revision = self.revision.wrapping_add(1);
         self.placements_cache.get_mut().take();
         self.win32.watch(bytes);
         unsafe { ghostty_terminal_vt_write(self.term, bytes.as_ptr(), bytes.len()) };

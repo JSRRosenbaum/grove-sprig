@@ -84,6 +84,10 @@ impl AppWindow {
             "maximized": window.is_maximized(),
             "fullscreen": window.is_fullscreen(),
             "active": self.window_active,
+            "layout_name": self.layout_name,
+            "selected_machine": self.selected_machine.as_deref().filter(|m| !m.is_empty())
+                .or_else(|| if self.selected_machine.is_none() { self.model.active_space().and_then(|s| s.machine.as_deref()) } else { None }),
+            "pending_keys": crate::keys::pending_keys(window),
         })
     }
 
@@ -106,6 +110,33 @@ impl AppWindow {
             #[cfg(not(any(target_os = "macos", windows)))]
             _window.show_window_menu(_ev.position);
         }))
+    }
+
+    /// Track a titlebar press across the whole window, including outside its bounds.
+    pub(super) fn window_drag_tracker(&self, cx: &mut Context<Self>) -> AnyElement {
+        let this = cx.entity().downgrade();
+        canvas(
+            |_, _, _| {},
+            move |_, _, window, _| {
+                let t = this.clone();
+                window.on_mouse_event(move |ev: &MouseDownEvent, phase, _, cx| {
+                    if phase == DispatchPhase::Capture && ev.button == MouseButton::Left {
+                        let _ = t.update(cx, |this, _| this.drag_from = None);
+                    }
+                });
+                let t = this.clone();
+                window.on_mouse_event(move |ev: &MouseMoveEvent, phase, window, cx| {
+                    if phase == DispatchPhase::Capture {
+                        let _ = t.update(cx, |this, _| this.drag_window(ev, window));
+                    }
+                });
+                window.on_mouse_event(move |ev: &MouseUpEvent, phase, _, cx| {
+                    if phase == DispatchPhase::Capture && ev.button == MouseButton::Left {
+                        let _ = this.update(cx, |this, _| this.drag_from = None);
+                    }
+                });
+            },
+        ).absolute().size_full().into_any_element()
     }
 
     /// The root's pointer moves: a press on a drag node that moved far enough moves the window.

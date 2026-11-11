@@ -135,7 +135,7 @@ fn sync_defaults(mods: &Path, installed_path: &Path, shipped_mods: &[(&str, &[u8
     write_if_changed(installed_path, serde_json::to_string_pretty(&installed).unwrap() + "\n")
 }
 
-pub fn sync_layouts(home: &Path, layouts: &[(&str, &str)]) -> std::io::Result<()> {
+pub fn sync_layouts(home: &Path, state_home: &Path, layouts: &[(&str, &str)]) -> std::io::Result<()> {
     let record = home.join("installed.json");
     let mut installed: Installed = serde_json::from_str(&std::fs::read_to_string(&record).unwrap_or_default()).unwrap_or_default();
     let dir = home.join("layouts");
@@ -148,7 +148,7 @@ pub fn sync_layouts(home: &Path, layouts: &[(&str, &str)]) -> std::io::Result<()
         let path = dir.join(format!("{}.json", &key["layout:".len()..]));
         if path.exists() && installed[&key].get("json").is_some_and(|hash| std::fs::read_to_string(&path).is_ok_and(|text| layout_fingerprint(&text) == *hash)) {
             std::fs::remove_file(path)?;
-            let _ = std::fs::remove_file(dir.join(".state").join(format!("{}.json", &key["layout:".len()..])));
+            let _ = std::fs::remove_file(state_home.join("layouts/.state").join(format!("{}.json", &key["layout:".len()..])));
         }
         installed.remove(&key);
     }
@@ -170,7 +170,7 @@ pub fn sync_layouts(home: &Path, layouts: &[(&str, &str)]) -> std::io::Result<()
             };
             if current != *was && current != hash {
                 let clone = edited_name(&dir, name, ".json");
-                copy_layout_state(home, name, &clone)?;
+                copy_layout_state(state_home, name, &clone)?;
                 std::fs::rename(&path, dir.join(format!("{clone}.json")))?;
                 edited_note(&clone);
             }
@@ -441,7 +441,7 @@ pub fn set_shared(key: String, value: Value) {
 }
 
 fn with_shared<R>(f: impl FnOnce(&mut SharedStore) -> R) -> R {
-    SHARED.with_borrow_mut(|slot| f(slot.get_or_insert_with(|| SharedStore::load(app_dir().join("shared.json")))))
+    SHARED.with_borrow_mut(|slot| f(slot.get_or_insert_with(|| SharedStore::load(crate::instances::state_dir().join("shared.json")))))
 }
 
 /// Called after mod close handlers, so their last changes reach disk before exit.
@@ -543,6 +543,8 @@ thread_local! {
     /// Snapshots the window publishes; mods read them synchronously and
     /// re-render when they change.
     static SNAPSHOT: RefCell<Snapshot> = RefCell::new(Snapshot::default());
+    /// The window's current connection, replaced when it reconnects.
+    static DOCUMENT_CORE: RefCell<Option<std::sync::Arc<crate::hc::Core>>> = const { RefCell::new(None) };
     static AGENT_ORDER: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
     static SHARED: RefCell<Option<SharedStore>> = const { RefCell::new(None) };
     /// Where key commands for each loaded copy go: (copy, mod, sender).
@@ -554,6 +556,14 @@ thread_local! {
     static REVISIONS: RefCell<HashMap<&'static str, u64>> = RefCell::new(HashMap::new());
     static COPY_SEQ: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static OVERLAY_SEQ: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+pub fn publish_document_core(core: std::sync::Arc<crate::hc::Core>) {
+    DOCUMENT_CORE.with_borrow_mut(|slot| *slot = Some(core));
+}
+
+fn document_core() -> Result<std::sync::Arc<crate::hc::Core>, HostError> {
+    DOCUMENT_CORE.with_borrow(|slot| slot.clone()).ok_or_else(|| HostError::new("no core connection"))
 }
 
 pub struct Snapshot {
@@ -890,6 +900,79 @@ fn exec_future(command: String, args: Vec<String>, cwd: Option<String>, on: Opti
     }
 }
 
+const MAX_SAFE_VERSION: u64 = 9_007_199_254_740_991;
+
+fn document_version(value: &HostValue) -> Result<u64, HostError> {
+    match value {
+        HostValue::Number(n) if n.is_finite() && *n >= 0.0 && *n <= MAX_SAFE_VERSION as f64 && n.fract() == 0.0 => Ok(*n as u64),
+        _ => Err(HostError::new("document version must be a nonnegative safe integer")),
+    }
+}
+
+fn document_on(options: Option<&HostValue>) -> Result<Option<String>, HostError> {
+    let Some(options) = options.filter(|v| !matches!(v, HostValue::Null)) else { return Ok(None) };
+    let HostValue::Object(_) = options else { return Err(HostError::new("document options must be an object")) };
+    match options.get("on") {
+        None | Some(HostValue::Null) => Ok(None),
+        Some(HostValue::Str(on)) => Ok(Some(on.clone())),
+        _ => Err(HostError::new("document machine must be a string or null")),
+    }
+}
+
+fn document_snapshot(result: Value) -> anyhow::Result<Value> {
+    let version = result.get("version").and_then(Value::as_u64)
+        .filter(|v| *v <= MAX_SAFE_VERSION)
+        .ok_or_else(|| anyhow::anyhow!("document returned an invalid version"))?;
+    let value = result.get("value").cloned().ok_or_else(|| anyhow::anyhow!("document returned no value"))?;
+    Ok(json!({ "value": value, "version": version }))
+}
+
+fn document_read(
+    call: &mut impl FnMut(&str, Value, Duration) -> anyhow::Result<Value>,
+    name: &str, on: &Option<String>, timeout: Duration,
+) -> anyhow::Result<Value> {
+    document_snapshot(call("doc.get", json!({ "name": name, "on": on }), timeout)?)
+}
+
+fn document_write(
+    call: &mut impl FnMut(&str, Value, Duration) -> anyhow::Result<Value>,
+    name: &str, value: Value, version: u64, on: &Option<String>,
+) -> anyhow::Result<Value> {
+    let timeout = Duration::from_secs(10);
+    let deadline = std::time::Instant::now() + timeout;
+    match call("doc.set", json!({ "name": name, "value": value, "version": version, "on": on }), timeout) {
+        Ok(result) => {
+            let version = result.get("version").and_then(Value::as_u64)
+                .filter(|v| *v <= MAX_SAFE_VERSION)
+                .ok_or_else(|| anyhow::anyhow!("document write returned an invalid version"))?;
+            Ok(json!({ "written": true, "version": version }))
+        }
+        Err(error) if crate::hc::error_kind(&error) == Some("conflict") => {
+            let latest = document_read(call, name, on, deadline.saturating_duration_since(std::time::Instant::now()))?;
+            Ok(json!({ "written": false, "value": latest["value"], "version": latest["version"] }))
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn document_future(
+    core: std::sync::Arc<crate::hc::Core>, name: String, on: Option<String>, write: Option<(Value, u64)>,
+) -> impl Future<Output = Result<HostValue, HostError>> + Send {
+    let (tx, rx) = async_channel::bounded(1);
+    std::thread::spawn(move || {
+        let mut call = |method: &str, params: Value, timeout: Duration| core.call_timeout(method, params, timeout);
+        let result = match write {
+            Some((value, version)) => document_write(&mut call, &name, value, version, &on),
+            None => document_read(&mut call, &name, &on, Duration::from_secs(10)),
+        };
+        let _ = tx.send_blocking(result.map_err(|error| format!("{error:#}")));
+    });
+    async move {
+        let value = rx.recv().await.map_err(|_| HostError::new("document request was lost"))?.map_err(HostError::new)?;
+        Ok(to_host(&value))
+    }
+}
+
 fn module(inst: Instance, copy: u64) -> HostModule {
     let reads = Rc::new(RefCell::new(LiveReads::default()));
     LIVE_READS.with_borrow_mut(|copies| {
@@ -910,6 +993,30 @@ fn module(inst: Instance, copy: u64) -> HostModule {
         .async_function("exec", |a| {
             let command = a.string(0)?.to_owned();
             Ok(exec_future(command, strings(a.get(1)), opt_str(a.get(2), "cwd"), opt_str(a.get(2), "on"), exec_limit(a.get(2))?))
+        })
+        .async_function("readDocument", |a| {
+            let name = a.string(0)?.to_owned();
+            let on = document_on(a.get(1))?;
+            Ok(document_future(document_core()?, name, on, None))
+        })
+        .async_function("writeDocument", |a| {
+            let name = a.string(0)?.to_owned();
+            let value = from_host(a.value(1)?);
+            let version = document_version(a.value(2)?)?;
+            let on = document_on(a.get(3))?;
+            Ok(document_future(document_core()?, name, on, Some((value, version))))
+        })
+        .async_function("readDocument", |a| {
+            let name = a.string(0)?.to_owned();
+            let on = document_on(a.get(1))?;
+            Ok(document_future(document_core()?, name, on, None))
+        })
+        .async_function("writeDocument", |a| {
+            let name = a.string(0)?.to_owned();
+            let value = from_host(a.value(1)?);
+            let version = document_version(a.value(2)?)?;
+            let on = document_on(a.get(3))?;
+            Ok(document_future(document_core()?, name, on, Some((value, version))))
         })
         .async_function("readTextFile", |a| {
             let path = a.string(0)?.to_owned();
@@ -1055,9 +1162,16 @@ fn module(inst: Instance, copy: u64) -> HostModule {
         .function("window", reader(reads.clone(), "window", |s| &s.window))
         .function("theme", |_| Ok(to_host(&serde_json::to_value(&*crate::settings::theme()).unwrap_or(Value::Null))))
         .function("settings", |_| Ok(to_host(&serde_json::to_value(&*crate::settings::get()).unwrap_or(Value::Null))))
-        .function("keys", |_| {
-            let list: Vec<Value> = crate::keys::listing().into_iter().map(|(s, k, a)| json!({ "section": s, "keys": k, "action": a })).collect();
-            Ok(to_host(&Value::Array(list)))
+        .function("keys", {
+            let reads = reads.clone();
+            move |_| {
+                REVISIONS.with_borrow(|r| reads.borrow_mut().record("window", r));
+                let list = SNAPSHOT.with_borrow(|snapshot| crate::keys::listing_for(
+                    snapshot.window["selected_machine"].as_str(),
+                    snapshot.window["layout_name"].as_str() == Some("rowan-terminal")));
+                let list: Vec<Value> = list.into_iter().map(|(s, k, a)| json!({ "section": s, "keys": k, "action": a })).collect();
+                Ok(to_host(&Value::Array(list)))
+            }
         })
         .function("openOverlay", |a| {
             let mut spec = from_host(a.value(0)?);
@@ -1177,7 +1291,7 @@ pub fn prepare_load(inst: &Instance) -> u64 {
         s.set(s.get() + 1);
         s.get()
     });
-    let dir = app_dir().join("data").join(&inst.name);
+    let dir = crate::instances::state_dir().join("data").join(&inst.name);
     let _ = std::fs::create_dir_all(&dir);
     let file = if inst.props.is_null() {
         "store.json".to_owned()
@@ -1234,6 +1348,60 @@ mod tests {
         assert!(exec_future("herdr_test_missing_command_638".into(), vec![], None, None, EXEC_LIMIT).await.is_err());
         let error = exec_future("sh".into(), vec!["-c".into(), "sleep 0.15; printf late".into()], None, None, Duration::from_millis(30)).await.unwrap_err();
         assert!(error.to_string().contains("0.03 s"), "{error}");
+    }
+
+    #[test]
+    fn document_versions_reject_unsafe_or_non_integral_numbers() {
+        for value in [HostValue::Null, HostValue::Number(-1.0), HostValue::Number(0.5),
+            HostValue::Number(f64::NAN), HostValue::Number(f64::INFINITY),
+            HostValue::Number(9_007_199_254_740_992.0)] {
+            assert!(document_version(&value).is_err());
+        }
+        assert_eq!(document_version(&HostValue::Number(0.0)).unwrap(), 0);
+        assert_eq!(document_version(&HostValue::Number(MAX_SAFE_VERSION as f64)).unwrap(), MAX_SAFE_VERSION);
+    }
+
+    #[test]
+    fn document_cas_routes_to_machine_and_preserves_latest_on_conflict() {
+        let mut docs: HashMap<Option<String>, (Value, u64)> = HashMap::new();
+        let mut call = |method: &str, params: Value, _: Duration| -> anyhow::Result<Value> {
+            assert_eq!(params["name"], "sidebar");
+            let on = params["on"].as_str().map(str::to_owned);
+            let entry = docs.entry(on).or_insert((Value::Null, 0));
+            match method {
+                "doc.get" => Ok(json!({"value": entry.0, "version": entry.1})),
+                "doc.set" if params["version"].as_u64() == Some(entry.1) => {
+                    *entry = (params["value"].clone(), entry.1 + 1);
+                    Ok(json!({"version": entry.1}))
+                }
+                "doc.set" => Err(anyhow::Error::new(crate::hc::RpcError(json!({"message": "stale", "data": {"kind": "conflict"}})))),
+                _ => panic!("unexpected method"),
+            }
+        };
+        let local = None;
+        let remote = Some("ash".to_string());
+        assert_eq!(document_read(&mut call, "sidebar", &local, Duration::from_secs(10)).unwrap(), json!({"value": null, "version": 0}));
+        assert_eq!(document_write(&mut call, "sidebar", json!({"local": true}), 0, &local).unwrap(), json!({"written": true, "version": 1}));
+        assert_eq!(document_write(&mut call, "sidebar", json!({"remote": true}), 0, &remote).unwrap(), json!({"written": true, "version": 1}));
+        assert_eq!(document_write(&mut call, "sidebar", json!({"stale": true}), 0, &remote).unwrap(),
+            json!({"written": false, "value": {"remote": true}, "version": 1}));
+        assert_eq!(document_read(&mut call, "sidebar", &local, Duration::from_secs(10)).unwrap(),
+            json!({"value": {"local": true}, "version": 1}));
+        assert_eq!(document_read(&mut call, "sidebar", &remote, Duration::from_secs(10)).unwrap(),
+            json!({"value": {"remote": true}, "version": 1}));
+    }
+
+    #[test]
+    fn document_errors_are_not_mistaken_for_conflicts() {
+        let mut calls = 0;
+        let mut call = |_: &str, _: Value, _: Duration| -> anyhow::Result<Value> {
+            calls += 1;
+            Err(anyhow::Error::new(crate::hc::RpcError(json!({"message": "offline", "data": {"kind": "unavailable"}}))))
+        };
+        assert!(document_write(&mut call, "sidebar", Value::Null, 0, &None).is_err());
+        assert_eq!(calls, 1);
+        assert!(document_snapshot(json!({"value": null, "version": 9_007_199_254_740_992_u64})).is_err());
+        assert!(document_snapshot(json!({"version": 0})).is_err());
     }
 
     #[test]
@@ -1469,7 +1637,7 @@ mod tests {
         let shipped = r#"{"id":"root","type":"block","content":{"mod":"files"},"size":{"px":360}}"#;
         // No record: formatting, BOM and whole-number floats are not edits.
         std::fs::write(dir.join("main.json"), "\u{feff}{\r\n \"type\":\"block\", \"id\":\"root\", \"size\":{\"px\":360.0}, \"content\":{\"mod\":\"files\"}}").unwrap();
-        sync_layouts(&root, &[("main", shipped)]).unwrap();
+        sync_layouts(&root, &root, &[("main", shipped)]).unwrap();
         assert!(!dir.join("main-edited.json").exists());
         assert!(!dir.join(".base").exists());
         let mut file: Node = serde_json::from_str(shipped).unwrap();
@@ -1480,7 +1648,7 @@ mod tests {
         let mut state = State::between(&file, &shown);
         state.file = serde_json::to_value(&file).ok();
         std::fs::write(dir.join(".state/main.json"), serde_json::to_string(&state).unwrap()).unwrap();
-        sync_layouts(&root, &[("main", shipped)]).unwrap();
+        sync_layouts(&root, &root, &[("main", shipped)]).unwrap();
         let mut rescued: Node = serde_json::from_str(&std::fs::read_to_string(dir.join("main-edited.json")).unwrap()).unwrap();
         let mut clicks: State = serde_json::from_str(&std::fs::read_to_string(dir.join(".state/main-edited.json")).unwrap()).unwrap();
         clicks.forget_since_saved(&rescued);
@@ -1498,7 +1666,7 @@ mod tests {
         // 0.1.x wrote no record of what it installed.
         std::fs::write(dir.join("main.json"), r#"{"id":"root","type":"block","content":{"mod":"old"}}"#).unwrap();
         take_sync_notes();
-        sync_layouts(&root, &[("main", r#"{"id":"root","type":"block","content":{"mod":"new"}}"#)]).unwrap();
+        sync_layouts(&root, &root, &[("main", r#"{"id":"root","type":"block","content":{"mod":"new"}}"#)]).unwrap();
         assert!(std::fs::read_to_string(dir.join("main.json")).unwrap().contains("new"));
         let aside = dir.join(format!("main.json.before-{}", env!("CARGO_PKG_VERSION")));
         assert!(std::fs::read_to_string(aside).unwrap().contains("old"));
@@ -1512,24 +1680,44 @@ mod tests {
         let root = std::env::temp_dir().join(format!("herdr-layout-sync-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let dir = root.join("layouts");
-        sync_layouts(&root, &[("a", "a1"), ("b", "b1"), ("c", "c1")]).unwrap();
+        sync_layouts(&root, &root, &[("a", "a1"), ("b", "b1"), ("c", "c1")]).unwrap();
         std::fs::create_dir_all(dir.join(".state")).unwrap();
         std::fs::write(dir.join(".state/a.json"), "clicks").unwrap();
         std::fs::write(dir.join("a.json"), "mine").unwrap();
         std::fs::write(dir.join("b.json"), "kept").unwrap();
-        sync_layouts(&root, &[("a", "a2")]).unwrap();
+        sync_layouts(&root, &root, &[("a", "a2")]).unwrap();
         assert_eq!(std::fs::read_to_string(dir.join("a.json")).unwrap(), "a2");
         assert_eq!(std::fs::read_to_string(dir.join("a-edited.json")).unwrap(), "mine");
         assert_eq!(std::fs::read_to_string(dir.join("b.json")).unwrap(), "kept");
         assert!(!dir.join("c.json").exists());
         assert_eq!(std::fs::read_to_string(dir.join(".state/a.json")).unwrap(), "clicks");
         std::fs::write(dir.join("a.json"), "again").unwrap();
-        sync_layouts(&root, &[("a", "a2")]).unwrap();
+        sync_layouts(&root, &root, &[("a", "a2")]).unwrap();
         assert_eq!(std::fs::read_to_string(dir.join("a-edited-2.json")).unwrap(), "again");
         assert_eq!(std::fs::read_to_string(dir.join("a-edited.json")).unwrap(), "mine");
         std::fs::remove_file(dir.join("a.json")).unwrap();
-        sync_layouts(&root, &[("a", "a3")]).unwrap();
+        sync_layouts(&root, &root, &[("a", "a3")]).unwrap();
         assert_eq!(std::fs::read_to_string(dir.join("a.json")).unwrap(), "a3");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn layout_sync_uses_the_supplied_state_home() {
+        let root = std::env::temp_dir().join(format!("herdr-layout-state-home-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let state_home = root.join("views/2");
+        let state = state_home.join("layouts/.state");
+        let legacy = root.join("layouts/.state");
+        sync_layouts(&root, &state_home, &[("main", "shipped")]).unwrap();
+        std::fs::create_dir_all(&state).unwrap();
+        std::fs::create_dir_all(&legacy).unwrap();
+        std::fs::write(state.join("main.json"), "slot clicks").unwrap();
+        std::fs::write(legacy.join("main.json"), "legacy clicks").unwrap();
+        std::fs::write(root.join("layouts/main.json"), "personal edit").unwrap();
+        sync_layouts(&root, &state_home, &[("main", "shipped")]).unwrap();
+        assert_eq!(std::fs::read_to_string(state.join("main-edited.json")).unwrap(), "slot clicks");
+        assert!(!legacy.join("main-edited.json").exists());
+        assert_eq!(std::fs::read_to_string(legacy.join("main.json")).unwrap(), "legacy clicks");
         std::fs::remove_dir_all(root).unwrap();
     }
 

@@ -133,7 +133,7 @@ export default class Picker extends View {
     // One continuous strip: each row (and the group title before it) at a fixed
     // y. Scrolling moves the strip only as far as it takes to keep the selected
     // row in view, so the arrows can't run the selection off the list.
-    const H = { head: 29, earlier: 35, new: 36, ctx: 32, space: 32 };
+    const H = { head: 31, earlier: 29, new: 32, ctx: 32, space: 32 };
     const tops = [];
     let y = 0;
     rows.forEach((r) => { tops.push(y); y += H[r.kind] ?? 32; });
@@ -156,22 +156,20 @@ export default class Picker extends View {
     const row = (r) => {
       if (r.kind === "head") {
         return h_flex()
-          .px(10)
-          .pt(10)
-          .pb(3)
+          .px(14)
+          .h(31)
           .gap(8)
           .items_center()
           .text_size(11)
           .font_semibold()
           .text_color(t.dim)
-          .child(h_flex().size(18).rounded(5).bg(spaceColor(t, r.w)).items_center().justify_center().text_size(10.5).font_bold().text_color("#ffffff").child([...r.w.name][0]?.toUpperCase() ?? "?"))
+          .child(h_flex().size(18).bg(spaceColor(t, r.w)).items_center().justify_center().text_size(10.5).font_bold().text_color("#ffffff").child([...r.w.name][0]?.toUpperCase() ?? "?"))
           .child(r.w.name);
       }
       if (r.kind === "earlier") {
         return h_flex()
           .id("pk-earlier")
-          .mt(6)
-          .px(10)
+          .px(14)
           .py(6)
           .border_t(1)
           .border_color(t.border)
@@ -188,12 +186,9 @@ export default class Picker extends View {
         const label = r.kind === "new" ? "new tab" : r.machine ? `new space on ${r.machine}` : "new space";
         return h_flex()
           .id(r.kind === "new" ? "pk-new" : `pk-space-${r.machine ?? "here"}`)
-          .mx(4)
-          .when(r.kind === "new", (el) => el.mt(4))
-          .px(10)
+          .px(14)
           .h(32)
           .items_center()
-          .rounded(7)
           .gap(8)
           .text_color(t.muted)
           .cursor_pointer()
@@ -207,10 +202,8 @@ export default class Picker extends View {
       const here = r.w.active && r.ctx.active;
       return h_flex()
         .id(`pk-${r.ctx.id}`)
-        .mx(4)
-        .px(10)
-.h(32)
-        .rounded(7)
+        .px(14)
+        .h(32)
         .gap(10)
         .items_center()
         .cursor_pointer()
@@ -229,8 +222,8 @@ export default class Picker extends View {
       .track_focus(this.handle)
       .w_full()
       .min_h(0)
-      .p(18)
-      .gap(10)
+      .border_1()
+      .border_color(t.border)
       .bg(t.popover)
       .text_size(13)
       .on_key_down((e, cx) => {
@@ -247,9 +240,9 @@ export default class Picker extends View {
         cx.stop_propagation();
         cx.notify();
       })
-      .child(h_flex().items_center().child(div().flex_1().text_size(15).font_semibold().text_color(t.foreground).child("Go to…")).child(div().id("picker-esc").px(6).py(2).rounded(5).text_size(11).text_color(t.dim).cursor_pointer().hover((s) => s.bg(t.hover).text_color(t.foreground)).on_click(() => this.close()).child("Esc")))
+      .child(h_flex().h(42).px(14).items_center().child(div().flex_1().text_size(15).font_semibold().text_color(t.foreground).child("Go to…")).child(div().id("picker-esc").px(6).py(2).rounded(5).text_size(11).text_color(t.dim).cursor_pointer().hover((s) => s.bg(t.hover).text_color(t.foreground)).on_click(() => this.close()).child("Esc")))
       .child(
-        h_flex().h(36).flex_none().px(10).gap(8).items_center().rounded(9).border_1().border_color(t.accent).bg(t.background)
+        h_flex().h(36).flex_none().px(10).gap(8).items_center().border_1().border_color(t.accent).bg(t.background)
           .child(svg("mods/workspace-chrome/search.svg").size(15).text_color(t.dim))
           .child(Input.new(this.input).flex_1().h_full().text_size(12.8).text_color(t.foreground)),
       )

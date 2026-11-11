@@ -1,0 +1,173 @@
+{
+  "id": "root",
+  "type": "row",
+  "children": [
+    {
+      "id": "sidebar",
+      "type": "column",
+      "children": [
+        {
+          "id": "sidebar-lists",
+          "type": "column",
+          "children": [
+            {
+              "id": "spaces",
+              "type": "block",
+              "content": {
+                "mod": "rowan-spaces"
+              },
+              "size": {
+                "weight": 4
+              },
+              "min": 90
+            },
+            {
+              "id": "agents",
+              "type": "block",
+              "content": {
+                "mod": "rowan-agents"
+              },
+              "size": {
+                "px": 28
+              },
+              "min": 28
+            }
+          ]
+        }
+      ],
+      "size": {
+        "px": 248
+      },
+      "min": 44,
+      "max": 480,
+      "background": "chrome",
+      "resizable": true
+    },
+    {
+      "id": "rowan-surface",
+      "type": "stack",
+      "children": [
+        {
+          "id": "rowan-workspace",
+          "type": "column",
+          "children": [
+            {
+              "id": "tabs",
+              "type": "block",
+              "content": {
+                "mod": "tabs"
+              },
+              "size": {
+                "px": 21
+              },
+              "window_drag": true
+            },
+            {
+              "id": "work-body",
+              "type": "row",
+              "children": [
+                {
+                  "id": "main",
+                  "type": "block",
+                  "content": {
+                    "tab": "active",
+                    "pane": {
+                      "header": {
+                        "content": {
+                          "mod": "pane"
+                        },
+                        "reveal": "always",
+                        "height": 30,
+                        "position": "top"
+                      },
+                      "background": "background",
+                      "border": {
+                        "width": 1,
+                        "color": "border"
+                      },
+                      "focus": {
+                        "width": 1,
+                        "color": "accent"
+                      },
+                      "radius": 0,
+                      "gap": 0,
+                      "lone": true
+                    }
+                  }
+                },
+                {
+                  "id": "panel",
+                  "type": "column",
+                  "children": [
+                    {
+                      "id": "panel-body",
+                      "type": "stack",
+                      "children": [
+                        {
+                          "id": "files",
+                          "type": "block",
+                          "content": {
+                            "mod": "files"
+                          }
+                        },
+                        {
+                          "id": "changes",
+                          "type": "block",
+                          "content": {
+                            "mod": "changes"
+                          }
+                        }
+                      ],
+                      "active": "changes"
+                    }
+                  ],
+                  "size": {
+                    "px": 389
+                  },
+                  "min": 280,
+                  "max": 900
+                }
+              ],
+              "padding": 0,
+              "gap": 0
+            }
+          ],
+          "resizable": false
+        },
+        {
+          "id": "rowan-empty",
+          "type": "block",
+          "content": {
+            "mod": "rowan-empty"
+          }
+        }
+      ],
+      "active": "rowan-empty"
+    }
+  ],
+  "background": "canvas",
+  "theme": "rowan-terminal",
+  "colors": {
+    "muted": "#929dbf",
+    "dim": "#8b97ba",
+    "unknown": "#929dbf"
+  },
+  "font": "JetBrainsMono Nerd Font",
+  "font_size": 15,
+  "ui_font": "JetBrainsMono Nerd Font",
+  "terminal_padding": [
+    23.333334,
+    23.333334
+  ],
+  "terminal_opacity": 1,
+  "divider": {
+    "width": 1,
+    "color": "border"
+  },
+  "titlebar": "none",
+  "traffic_lights": [
+    12,
+    16
+  ],
+  "terminal_menu": "menu"
+}

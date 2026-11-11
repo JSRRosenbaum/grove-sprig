@@ -550,6 +550,46 @@ impl Node {
         self.walk().into_iter().filter(|n| n.is_pane()).collect()
     }
 
+    /// Move the nearest matching split boundary in the requested direction.
+    /// Fixed-size or non-resizable siblings are not altered.
+    pub fn resize_pane(&mut self, pane: &str, direction: &str) -> bool {
+        let (axis, forward) = match direction {
+            "left" => (Axis::Row, false),
+            "right" => (Axis::Row, true),
+            "up" => (Axis::Column, false),
+            "down" => (Axis::Column, true),
+            _ => return false,
+        };
+        let Some(path) = self.path_to(pane) else { return false };
+        for toward in [forward, !forward] {
+            for pair in path.windows(2).rev() {
+                let Some(parent) = self.find_mut(&pair[0]) else { return false };
+                if parent.axis() != Some(axis) || !parent.resizable() { continue; }
+                let Some(children) = parent.children_mut() else { continue };
+                let Some(i) = children.iter().position(|n| n.id == pair[1]) else { continue };
+                let neighbor = if toward { i.checked_add(1).filter(|j| *j < children.len()) } else { i.checked_sub(1) };
+                let Some(j) = neighbor else { continue };
+                let weight = |n: &Node| match n.size {
+                    None => Some(1.0),
+                    Some(Size::Weight { weight }) if weight.is_finite() && weight > 0.0 => Some(weight),
+                    _ => None,
+                };
+                if !children[i].resizable() || !children[j].resizable() { return false; }
+                let first = i.min(j);
+                let second = i.max(j);
+                let (Some(a), Some(b)) = (weight(&children[first]), weight(&children[second])) else { return false };
+                let total = a + b;
+                let ratio = (a / total + if forward { 0.05 } else { -0.05 }).clamp(0.1, 0.9);
+                let new_a = total * ratio;
+                if (new_a - a).abs() <= f32::EPSILON { return false; }
+                children[first].size = Some(Size::Weight { weight: new_a });
+                children[second].size = Some(Size::Weight { weight: total - new_a });
+                return true;
+            }
+        }
+        false
+    }
+
     /// Visible blocks (hidden nodes and inactive stack children skipped).
     pub fn visible_blocks(&self) -> Vec<&Node> {
         if self.hidden {

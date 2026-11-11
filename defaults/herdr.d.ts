@@ -28,6 +28,14 @@ export function readTextFile(path: string, options?: { on?: string | null }): Pr
  * Rejects on a stale snapshot; existing files are replaced atomically. */
 export function writeTextFile(path: string, text: string, expected: string | null): Promise<null>;
 
+/** Read a named JSON document from this core, or from `on` via this connection.
+ * A never-written document has value null and version 0; deletion retains its version. Rejects on RPC errors. */
+export function readDocument(name: string, options?: { on?: string | null }): Promise<{ value: unknown; version: number }>;
+/** Compare-and-set a document using a nonnegative safe integer version.
+ * On conflict, reads and returns the latest value and version; other errors reject.
+ * Both the write and conflict read share a 10-second deadline. */
+export function writeDocument(name: string, value: unknown, version: number, options?: { on?: string | null }): Promise<{ written: true; version: number } | { written: false; value: unknown; version: number }>;
+
 /** The agents people can start from a menu (entries with `run` in programs.json), most picked
  *  first, and whether each is installed: asked of the shell agents start in (on another machine,
  *  `on`, its login/interactive shell when supported), at most once a minute per machine.
@@ -51,6 +59,8 @@ export function playSound(sound: string): null;
  * "" gives the space or tab Herdr's automatic name again. The main ones:
  * Spaces: space.new {name?, folder?, tab?, argv?, task?, machine?}, space.close {id?}, space.rename {id?, name},
  *   space.move {id, index}, space.select {index | id}, space.next, space.prev.
+ *   Keys/clicks select a new space; CLI/script creation preserves the view.
+ *   A script that intentionally shows it calls space.select with the returned space id.
  * Tabs: tab.new {name?, space?, folder?, argv?, task?} (argv: an agent, task: its first message)
  *   or {name?, space?, mod, props?} (a tab whose only pane is a mod),
  *   tab.close {id?}, tab.rename {id?, name}, tab.move {id, index}, tab.select {index | id},
@@ -132,8 +142,10 @@ export interface SpaceInfo {
 }
 
 /** Machines' layout documents on this connection. Null names this computer.
- * Loading ends after the first read, including failures; unavailable includes offline cores. */
-export function machines(): { name: string | null; layout: "loading" | "ready" | "unavailable" }[];
+ * Loading ends after the first read, including failures; unavailable includes offline cores.
+ * space_order is the last core-acknowledged workspace order (qualified ids), not optimistic spaces().
+ * It is null before any document has been read. */
+export function machines(): { name: string | null; layout: "loading" | "ready" | "unavailable"; space_order: string[] | null }[];
 
 /** Spaces in order. Mods re-render when they change. */
 export function spaces(): SpaceInfo[];
@@ -248,7 +260,8 @@ export function commands(): { name: string; args: { name: string; required: bool
 
 /** The window, for layouts that draw their own title bar (`"titlebar": "none"`). `buttons`:
  *  the system draws no window buttons, so draw them (`window.minimize`, `window.maximize`,
- *  `window.close`); on macOS the traffic lights always stay. Live. */
+ *  `window.close`); on macOS the traffic lights always stay. Live.
+ *  Null when no window snapshot exists, including standalone `herdr-app check`. */
 export function window(): {
   platform: "linux" | "macos" | "windows";
   titlebar: "system" | "none";
@@ -256,7 +269,13 @@ export function window(): {
   maximized: boolean;
   fullscreen: boolean;
   active: boolean;
-};
+  /** Name of the layout currently shown in this window. */
+  layout_name: string;
+  /** Selected source machine, including an empty endpoint; null means this computer. */
+  selected_machine: string | null;
+  /** GPUI's currently pending chord, in canonical keystroke notation. */
+  pending_keys: string[];
+} | null;
 
 /** For a floating mod: where it sits now. `vertical` on the left/right edges, horizontal on
  *  top/bottom; while dragged, where it would land. `hovered` is true while the pointer is on it

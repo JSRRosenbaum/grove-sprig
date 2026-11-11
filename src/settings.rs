@@ -95,10 +95,11 @@ fn preset(name: &str) -> Option<&'static Palette> {
 
 /// The shipped theme files (defaults/themes), written to `themes/` when missing.
 const THEMES: &[(&str, &str)] = &[
+    ("rowan-terminal", include_str!("../defaults/themes/rowan-terminal.json")),
     ("atom-one-dark", include_str!("../defaults/themes/atom-one-dark.json")),
     ("win98", include_str!("../defaults/themes/win98.json")),
 ];
-pub const SHIPPED_THEMES: &[&str] = &["atom-one-dark", "win98"];
+pub const SHIPPED_THEMES: &[&str] = &["rowan-terminal", "atom-one-dark", "win98"];
 
 /// `themes/<name>.json`: a palette, plus `colors` overrides like settings.json's.
 #[derive(Deserialize)]
@@ -638,8 +639,8 @@ thread_local! {
         RefCell::new((Rc::new(Settings::default()), Rc::new(resolve(&GRAPHITE, &BTreeMap::new()))));
 }
 
-const ZOOM_MIN: f32 = 0.5;
-const ZOOM_MAX: f32 = 3.0;
+pub(crate) const ZOOM_MIN: f32 = 0.5;
+pub(crate) const ZOOM_MAX: f32 = 3.0;
 
 pub fn get() -> Rc<Settings> {
     CURRENT.with(|c| c.borrow().0.clone())

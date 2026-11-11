@@ -114,18 +114,20 @@ export default class Worktree extends View {
     this.at = 0;
     this.input = InputState.new({ value: this.text, placeholder: this.opening ? "filter worktrees" : "branch name" });
     this.input.on("change", (_e, cx) => { this.text = this.input.value(); this.error = ""; this.at = 0; cx.notify(); });
-    this.input.on("submit", (_e, cx) => this.go(cx));
+    this.input.on("submit", (_e, cx) => (this.opening ? this.open(this.shown()[this.at]) : this.go(cx)));
     this.inputFocused = true;
     this.input.on("focus", (_e, cx) => { this.inputFocused = true; cx.notify(); });
     this.input.on("blur", (_e, cx) => { this.inputFocused = false; cx.notify(); });
     this.handle = cx.focus_handle();
     this.handle.focus(); // the root is mounted from the first frame: keep the keyboard here while loading
     if (props()?.action !== "remove") this.input.focus();
+    if (this.opening) cx.timer.after(600, () => this.input.focus());
     this.busy = false;
     this.error = "";
     this.repo = undefined; // undefined: looking, null: not in git
     this.dirty = false;
     this.unpushed = [];
+
     cx.spawn(async (cx) => {
       try {
         if (this.on) {
@@ -150,7 +152,7 @@ export default class Worktree extends View {
         // loading lands on nothing and the dialog stays keyboard-dead.
         this.handle.focus();
         if (props().action !== "remove") cx.timer.after(100, () => this.input.focus());
-        if (props().branch) await this.work(cx);
+        if (props()?.action === "new" || (props()?.branch && !this.opening && props()?.action !== "remove")) await this.work(cx);
       } catch (error) { this.repo = null; this.error = String(error); cx.notify(); }
     });
   }
@@ -182,10 +184,10 @@ export default class Worktree extends View {
   }
 
   async create() {
-    const branch = this.text.trim();
-    if (!branch) return "Type a branch name.";
+    const requested = this.text.trim();
+    const branch = requested || `worktree-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
     const path = `${ROOT(this.userHome)}/${this.repo.name}/${slug(branch)}`;
-    const exists = (await git(this.repo.main, ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`], this.on)).ok;
+    const exists = requested && (await git(this.repo.main, ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`], this.on)).ok;
     const add = exists ? ["worktree", "add", path, branch] : ["worktree", "add", "-b", branch, path, "HEAD"];
     const r = await git(this.repo.top, add, this.on, 600_000);
     if (!r.ok) return r.err || "git worktree add failed.";
@@ -237,7 +239,7 @@ export default class Worktree extends View {
       cx.stop_propagation();
       return cx.notify();
     }
-    if (e.key === "enter" && props()?.action === "remove") return this.go(cx);
+    if (e.key === "enter") return this.go(cx);
   }
 
   renderOpen(t) {
@@ -253,9 +255,8 @@ export default class Worktree extends View {
         .id(`wt-${i}`)
         .flex_none()
         .h(44)
-        .px(10)
+        .px(16)
         .justify_center()
-        .rounded(7)
         .cursor_pointer()
         .when(on, (el) => el.bg(t.selected))
         .when(!on, (el) => el.hover((s) => s.bg(t.hover)))
@@ -277,16 +278,16 @@ export default class Worktree extends View {
       .track_focus(this.handle)
       .on_key_down((e, cx) => this.key(e, cx))
       .size_full()
-      .p(16)
-      .gap(10)
+      .border_1()
+      .border_color(t.border)
       .bg(t.popover)
       .text_size(13)
-      .child(h_flex().child(div().flex_1().font_semibold().text_color(t.foreground).child(`Open worktree${r ? ` of ${r.name}` : ""}`)).child(div().text_size(11).text_color(t.dim).child(r ? count : "")))
-      .when(r === undefined || (r && this.list === undefined), (el) => el.child(div().text_color(t.muted).child("\u2026")))
-      .when(r === null, (el) => el.child(div().text_color(t.muted).child(`${this.folder ? tilde(this.folder, this.userHome ?? "") : "This folder"} is not in a git repository.`)))
+      .child(h_flex().px(16).py(12).child(div().flex_1().font_semibold().text_color(t.foreground).child(`Open worktree${r ? ` of ${r.name}` : ""}`)).child(div().text_size(11).text_color(t.dim).child(r ? count : "")))
+      .when(r === undefined || (r && this.list === undefined), (el) => el.child(div().px(16).py(8).text_color(t.muted).child("\u2026")))
+      .when(r === null, (el) => el.child(div().px(16).py(8).text_color(t.muted).child(`${this.folder ? tilde(this.folder, this.userHome ?? "") : "This folder"} is not in a git repository.`)))
       .when(Boolean(r && this.list), (el) =>
         el
-          .child(Input.new(this.input).h(32).px(10).items_center().rounded(6).border(1).border_color(this.inputFocused ? t.accent : t.input).bg(t.background).text_color(t.foreground))
+          .child(Input.new(this.input).h(32).px(16).items_center().border(1).border_color(this.inputFocused ? t.accent : t.input).bg(t.background).text_color(t.foreground))
           .child(
             div()
               .relative()
@@ -298,12 +299,12 @@ export default class Worktree extends View {
                   .size_full()
                   .overflow_y_scroll()
                   .children(rows.map(row))
-                  .when(rows.length === 0, (el) => el.child(div().p(10).text_color(t.dim).child("No matching worktrees."))),
+                  .when(rows.length === 0, (el) => el.child(div().px(16).py(10).text_color(t.dim).child("No matching worktrees."))),
               )
               .child(Scrollbar.vertical("wt-list").absolute().inset_0()),
           ),
       )
-      .child(h_flex().justify_end().text_size(11).text_color(t.dim).child("\u2191\u2193 choose \u00b7 \u21b5 open \u00b7 esc close"));
+      .child(h_flex().h(32).px(16).items_center().justify_end().text_size(11).text_color(t.dim).child("\u2191\u2193 choose \u00b7 \u21b5 open \u00b7 esc close"));
   }
 
   render(cx) {
@@ -322,44 +323,33 @@ export default class Worktree extends View {
             ? !r.linked
               ? "This is the repository's main checkout, not a worktree."
               : `Closes the space and deletes ${tilde(r.top, this.userHome)}. The branch stays.`
-            : `A new space on a checkout in ${tilde(ROOT(this.userHome), this.userHome)}/${r.name}/. A branch that exists is checked out; a new one starts from here.`;
+            : `Creating a branch and workspace in ${tilde(ROOT(this.userHome), this.userHome)}/${r.name}/ from this checkout.`;
     const blocked = !r || (remove && !r.linked);
     return v_flex()
       .id("worktree")
       .track_focus(this.handle)
       .on_key_down((e, cx) => this.key(e, cx))
       .size_full()
-      .p(16)
-      .gap(10)
+      .border_1()
+      .border_color(t.border)
       .bg(t.popover)
       .text_size(13)
-      .child(div().font_semibold().text_color(t.foreground).child(title))
-      .child(div().text_color(t.muted).child(detail))
-      .when(remove && this.dirty, (el) => el.child(div().text_color(t.blocked).child("It has uncommitted changes: they will be lost.")))
-      .when(remove && this.unpushed.length > 0, (el) => el.child(div().text_color(t.blocked).child(`Submodule ${this.unpushed.join(", ")} has commits that aren't pushed anywhere: they will be lost.`)))
-      .when(!remove && !blocked, (el) =>
-        el.child(
-          Input.new(this.input)
-            .h(32)
-            .px(10)
-            .items_center()
-            .rounded(6)
-            .border(1)
-            .border_color(this.inputFocused ? t.accent : t.input)
-            .bg(t.background)
-            .text_color(t.foreground),
-        ),
-      )
-      .when(Boolean(this.error), (el) => el.child(div().text_color(t.blocked).child(this.error)))
+      .child(div().px(16).py(12).font_semibold().text_color(t.foreground).child(title))
+      .child(div().px(16).py(8).text_color(t.muted).child(detail))
+      .when(remove && this.dirty, (el) => el.child(div().px(16).py(8).text_color(t.blocked).child("It has uncommitted changes: they will be lost.")))
+      .when(remove && this.unpushed.length > 0, (el) => el.child(div().px(16).py(8).text_color(t.blocked).child(`Submodule ${this.unpushed.join(", ")} has commits that aren't pushed anywhere: they will be lost.`)))
+      .when(Boolean(this.error), (el) => el.child(div().px(16).py(8).text_color(t.blocked).child(this.error)))
       .child(div().flex_1())
       .child(
         h_flex()
+          .h(32)
+          .px(16)
+          .items_center()
           .justify_end()
           .text_size(11)
           .text_color(t.dim)
-          .gap(6)
           .when(this.busy, (el) => el.child(div().frames(["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"], 90)))
-          .child(this.busy ? "working…" : blocked ? "esc close" : remove ? "↵ remove · esc cancel" : "↵ create · esc cancel"),
+          .child(this.busy ? "working…" : blocked ? "esc close" : remove ? "↵ remove · esc cancel" : this.error ? "↵ retry · esc close" : "creating…"),
       );
   }
 }
